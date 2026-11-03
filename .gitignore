@@ -1,0 +1,18 @@
+# Provider plugins and module downloads; recreated by `terraform init`
+.terraform/
+
+# State can hold secrets and is never committed
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+
+# Variable values (domain, API keys); only the example is shared
+*.tfvars
+!*.tfvars.example
+
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
