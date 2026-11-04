@@ -1,0 +1,5 @@
+# Days of automated RDS backups. Free-plan AWS accounts are capped: use 1 there.
+# db_backup_retention_days = 7
+
+# Restore the database from an earlier teardown's final snapshot (first create only)
+# db_snapshot_identifier = "tripwire-db-final-3f9a2c"

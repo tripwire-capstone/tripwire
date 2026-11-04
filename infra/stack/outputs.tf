@@ -17,3 +17,8 @@ output "vpc_id" {
   description = "VPC that holds the whole stack."
   value       = aws_vpc.main.id
 }
+
+output "db_endpoint" {
+  description = "Postgres host name, reachable only from inside the VPC."
+  value       = aws_db_instance.main.address
+}
