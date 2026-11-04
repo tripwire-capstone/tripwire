@@ -150,6 +150,14 @@ resource "aws_instance" "data" {
       error_message = "files/clickhouse-server-config.xml or files/clickhouse-profiles-config.xml differs from Laminar's released copy."
     }
   }
+
+  # The first-boot script downloads Docker Compose and the images over the internet, which the
+  # private subnet only reaches through the NAT. Nothing else in this resource refers to the NAT,
+  # so without this the box can boot while the NAT (about 2 minutes to create) isn't routing yet.
+  depends_on = [
+    aws_route.private_nat,
+    aws_route_table_association.private,
+  ]
 }
 
 resource "aws_volume_attachment" "data" {

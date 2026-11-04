@@ -6,7 +6,9 @@ dnf install -y docker
 systemctl enable --now docker
 
 mkdir -p /usr/local/lib/docker/cli-plugins
-curl -fsSL "https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-linux-${compose_arch}" \
+# GitHub is reached through the NAT; retry for up to ~10 minutes in case it isn't routing yet
+curl -fsSL --connect-timeout 10 --retry 30 --retry-delay 10 --retry-all-errors \
+  "https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-linux-${compose_arch}" \
   -o /usr/local/lib/docker/cli-plugins/docker-compose
 # Refuse a download that isn't the released binary; set -e stops the script here
 echo "${compose_sha256}  /usr/local/lib/docker/cli-plugins/docker-compose" | sha256sum -c -
