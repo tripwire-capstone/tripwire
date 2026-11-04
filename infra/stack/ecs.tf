@@ -13,6 +13,10 @@ data "http" "rds_ca" {
 locals {
   laminar_url = "https://${local.laminar_domain}"
 
+  # The frontend reaches the app-server's internal API (8000) and realtime stream (8002)
+  # through this private DNS name, kept up to date by ECS as tasks come and go
+  app_server_host = "${aws_service_discovery_service.app_server.name}.${aws_service_discovery_private_dns_namespace.internal.name}"
+
   laminar_common_env = {
     ENVIRONMENT         = "LITE"
     CLICKHOUSE_URL      = "http://${aws_instance.data.private_ip}:8123"
@@ -35,8 +39,8 @@ locals {
 
   frontend_env = merge(local.laminar_common_env, {
     PORT                       = "5667"
-    BACKEND_URL                = "http://localhost:8000"
-    BACKEND_RT_URL             = "http://localhost:8002"
+    BACKEND_URL                = "http://${local.app_server_host}:8000"
+    BACKEND_RT_URL             = "http://${local.app_server_host}:8002"
     NEXTAUTH_URL               = local.laminar_url
     BETTER_AUTH_URL            = local.laminar_url
     NEXT_PUBLIC_URL            = local.laminar_url
@@ -140,12 +144,34 @@ resource "aws_iam_role_policy" "laminar_task_exec" {
   policy = data.aws_iam_policy_document.ecs_exec.json
 }
 
-resource "aws_ecs_task_definition" "laminar" {
-  family                   = "${var.name}-laminar"
+# Private DNS for the services, so the frontend can find the app-server
+resource "aws_service_discovery_private_dns_namespace" "internal" {
+  name = "${var.name}.internal"
+  vpc  = aws_vpc.main.id
+}
+
+resource "aws_service_discovery_service" "app_server" {
+  name = "app-server"
+
+  dns_config {
+    namespace_id   = aws_service_discovery_private_dns_namespace.internal.id
+    routing_policy = "MULTIVALUE"
+
+    dns_records {
+      type = "A"
+      ttl  = 10
+    }
+  }
+}
+
+# Two task definitions and two services, so the app-server (trace ingestion) and the
+# frontend (dashboard) restart, scale and fail health checks independently
+resource "aws_ecs_task_definition" "app_server" {
+  family                   = "${var.name}-app-server"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 1024
-  memory                   = 2048
+  cpu                      = var.task_sizes.app_server.cpu
+  memory                   = var.task_sizes.app_server.memory
   execution_role_arn       = aws_iam_role.ecs_execution.arn
   task_role_arn            = aws_iam_role.laminar_task.arn
 
@@ -175,6 +201,24 @@ resource "aws_ecs_task_definition" "laminar" {
         }
       }
     },
+  ])
+}
+
+resource "aws_ecs_task_definition" "frontend" {
+  family                   = "${var.name}-frontend"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = var.task_sizes.frontend.cpu
+  memory                   = var.task_sizes.frontend.memory
+  execution_role_arn       = aws_iam_role.ecs_execution.arn
+  task_role_arn            = aws_iam_role.laminar_task.arn
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "ARM64"
+  }
+
+  container_definitions = jsonencode([
     {
       name      = "frontend"
       image     = "ghcr.io/lmnr-ai/frontend:${var.laminar_version}@${var.laminar_image_digests.frontend}"
@@ -196,10 +240,60 @@ resource "aws_ecs_task_definition" "laminar" {
   ])
 }
 
-resource "aws_ecs_service" "laminar" {
-  name                   = "laminar"
+resource "aws_ecs_service" "app_server" {
+  name                   = "app-server"
   cluster                = aws_ecs_cluster.main.id
-  task_definition        = aws_ecs_task_definition.laminar.arn
+  task_definition        = aws_ecs_task_definition.app_server.arn
+  desired_count          = 1
+  launch_type            = "FARGATE"
+  enable_execute_command = true
+
+  health_check_grace_period_seconds = 60
+
+  deployment_minimum_healthy_percent = 100
+  deployment_maximum_percent         = 200
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  network_configuration {
+    subnets          = values(aws_subnet.private)[*].id
+    security_groups  = [aws_security_group.app.id]
+    assign_public_ip = false
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.api.arn
+    container_name   = "app-server"
+    container_port   = 8000
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.grpc.arn
+    container_name   = "app-server"
+    container_port   = 8001
+  }
+
+  service_registries {
+    registry_arn = aws_service_discovery_service.app_server.arn
+  }
+
+  # Target groups must be attached to the ALB first; the roles must outlive the
+  # service on teardown, or its tasks can't shut down cleanly
+  depends_on = [
+    aws_lb_listener_rule.api,
+    aws_lb_listener_rule.grpc,
+    aws_iam_role_policy.ecs_execution_secrets,
+    aws_iam_role_policy_attachment.ecs_execution,
+  ]
+}
+
+resource "aws_ecs_service" "frontend" {
+  name                   = "frontend"
+  cluster                = aws_ecs_cluster.main.id
+  task_definition        = aws_ecs_task_definition.frontend.arn
   desired_count          = 1
   launch_type            = "FARGATE"
   enable_execute_command = true
@@ -227,24 +321,10 @@ resource "aws_ecs_service" "laminar" {
     container_port   = 5667
   }
 
-  load_balancer {
-    target_group_arn = aws_lb_target_group.api.arn
-    container_name   = "app-server"
-    container_port   = 8000
-  }
-
-  load_balancer {
-    target_group_arn = aws_lb_target_group.grpc.arn
-    container_name   = "app-server"
-    container_port   = 8001
-  }
-
   # Target groups must be attached to the ALB first; the roles must outlive the
   # service on teardown, or its tasks can't shut down cleanly
   depends_on = [
     aws_lb_listener_rule.frontend,
-    aws_lb_listener_rule.api,
-    aws_lb_listener_rule.grpc,
     aws_iam_role_policy.ecs_execution_secrets,
     aws_iam_role_policy_attachment.ecs_execution,
   ]

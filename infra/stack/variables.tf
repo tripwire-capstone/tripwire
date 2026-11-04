@@ -122,3 +122,14 @@ variable "laminar_image_digests" {
     error_message = "Each digest must look like sha256: followed by 64 hex characters."
   }
 }
+variable "task_sizes" {
+  description = "Fargate CPU units and memory (MB) for each Laminar service. Must be a valid Fargate pair, e.g. cpu 512 with memory 1024-4096. Raise memory if a task stops with OutOfMemoryError."
+  type = object({
+    app_server = object({ cpu = number, memory = number })
+    frontend   = object({ cpu = number, memory = number })
+  })
+  default = {
+    app_server = { cpu = 512, memory = 1024 }
+    frontend   = { cpu = 512, memory = 1024 }
+  }
+}

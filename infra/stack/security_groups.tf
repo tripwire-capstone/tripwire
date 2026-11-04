@@ -11,6 +11,12 @@ locals {
     quickwit_search = 7280
     quickwit_ingest = 7281
   }
+
+  # The frontend calls the app-server directly; both services share the app group
+  app_internal_ports = {
+    api      = 8000
+    realtime = 8002
+  }
 }
 
 resource "aws_security_group" "alb" {
@@ -77,6 +83,19 @@ resource "aws_vpc_security_group_ingress_rule" "app_from_alb" {
   security_group_id            = aws_security_group.app.id
   description                  = "Laminar ${each.key} from the load balancer"
   referenced_security_group_id = aws_security_group.alb.id
+  ip_protocol                  = "tcp"
+  from_port                    = each.value
+  to_port                      = each.value
+}
+
+# With frontend and app-server in separate tasks, the frontend's internal API and
+# realtime calls cross the network, so the app group must accept them from itself
+resource "aws_vpc_security_group_ingress_rule" "app_internal" {
+  for_each = local.app_internal_ports
+
+  security_group_id            = aws_security_group.app.id
+  description                  = "Laminar ${each.key} from the frontend"
+  referenced_security_group_id = aws_security_group.app.id
   ip_protocol                  = "tcp"
   from_port                    = each.value
   to_port                      = each.value
