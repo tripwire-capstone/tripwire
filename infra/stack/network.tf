@@ -11,8 +11,9 @@ data "aws_availability_zones" "available" {
 locals {
   azs = slice(sort(data.aws_availability_zones.available.names), 0, 2)
 
-  # One /24 per AZ: 10.20.0.0/24, 10.20.1.0/24
-  public_subnets = { for index, az in local.azs : az => cidrsubnet(var.vpc_cidr, 8, index) }
+  # Public: 10.20.0.0/24, 10.20.1.0/24 (ALB, NAT). Private: 10.20.10.0/24, 10.20.11.0/24 (everything else)
+  public_subnets  = { for index, az in local.azs : az => cidrsubnet(var.vpc_cidr, 8, index) }
+  private_subnets = { for index, az in local.azs : az => cidrsubnet(var.vpc_cidr, 8, index + 10) }
 }
 
 resource "aws_vpc" "main" {
@@ -36,13 +37,24 @@ resource "aws_internet_gateway" "main" {
 resource "aws_subnet" "public" {
   for_each = local.public_subnets
 
-  vpc_id                  = aws_vpc.main.id
-  availability_zone       = each.key
-  cidr_block              = each.value
-  map_public_ip_on_launch = true
+  vpc_id            = aws_vpc.main.id
+  availability_zone = each.key
+  cidr_block        = each.value
 
   tags = {
     Name = "${var.name}-public-${each.key}"
+  }
+}
+
+resource "aws_subnet" "private" {
+  for_each = local.private_subnets
+
+  vpc_id            = aws_vpc.main.id
+  availability_zone = each.key
+  cidr_block        = each.value
+
+  tags = {
+    Name = "${var.name}-private-${each.key}"
   }
 }
 
@@ -67,12 +79,55 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-# Free; S3 traffic (including ECR image layers) stays on AWS's network
+resource "aws_eip" "nat" {
+  domain = "vpc"
+
+  tags = {
+    Name = "${var.name}-nat"
+  }
+}
+
+# One NAT in the first AZ: RDS and the data box are pinned there too, so a
+# second NAT would not keep the stack up if that AZ failed
+resource "aws_nat_gateway" "main" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public[local.azs[0]].id
+
+  tags = {
+    Name = var.name
+  }
+
+  # The NAT needs the VPC's internet gateway to exist before it can route traffic
+  depends_on = [aws_internet_gateway.main]
+}
+
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "${var.name}-private"
+  }
+}
+
+resource "aws_route" "private_nat" {
+  route_table_id         = aws_route_table.private.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.main.id
+}
+
+resource "aws_route_table_association" "private" {
+  for_each = aws_subnet.private
+
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.private.id
+}
+
+# Free; S3 traffic (including ECR image layers) stays on AWS's network and skips the NAT
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.main.id
   service_name      = "com.amazonaws.${var.region}.s3"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = [aws_route_table.public.id]
+  route_table_ids   = [aws_route_table.public.id, aws_route_table.private.id]
 
   tags = {
     Name = "${var.name}-s3"

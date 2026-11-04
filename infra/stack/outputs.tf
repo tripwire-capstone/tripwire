@@ -1,5 +1,15 @@
+output "nat_public_ip" {
+  description = "Address all outbound traffic from the private subnets comes from; give it to anyone who needs to allowlist this stack."
+  value       = aws_eip.nat.public_ip
+}
+
+output "private_subnet_ids" {
+  description = "Private subnets, one per AZ, keyed by AZ name. ECS tasks, RDS and the data box live here."
+  value       = { for az, subnet in aws_subnet.private : az => subnet.id }
+}
+
 output "public_subnet_ids" {
-  description = "Public subnets, one per AZ, keyed by AZ name."
+  description = "Public subnets, one per AZ, keyed by AZ name. Only the ALB and NAT live here."
   value       = { for az, subnet in aws_subnet.public : az => subnet.id }
 }
 

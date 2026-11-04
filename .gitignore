@@ -10,6 +10,9 @@
 *.tfvars
 !*.tfvars.example
 
+# Each deployer's own state bucket; only the example is shared
+backend.hcl
+
 crash.log
 crash.*.log
 override.tf
