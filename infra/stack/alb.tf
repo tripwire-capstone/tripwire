@@ -140,8 +140,21 @@ resource "aws_lb_listener_rule" "frontend" {
   listener_arn = aws_lb_listener.https.arn
   priority     = 30
 
+  # Invite-only: the UI is reachable only after logging in to the Cognito pool
+  action {
+    type  = "authenticate-cognito"
+    order = 1
+
+    authenticate_cognito {
+      user_pool_arn       = aws_cognito_user_pool.main.arn
+      user_pool_client_id = aws_cognito_user_pool_client.alb.id
+      user_pool_domain    = aws_cognito_user_pool_domain.main.domain
+    }
+  }
+
   action {
     type             = "forward"
+    order            = 2
     target_group_arn = aws_lb_target_group.frontend.arn
   }
 

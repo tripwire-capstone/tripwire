@@ -10,3 +10,5 @@
 # Restore the data volume from an earlier teardown's final snapshot (first create only)
 # data_volume_snapshot_id = "snap-0123456789abcdef0"
 
+# Emails allowed to log in to the Laminar UI; each gets a temporary password by email
+# laminar_users = ["you@example.com"]

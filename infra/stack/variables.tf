@@ -66,3 +66,14 @@ variable "data_volume_snapshot_id" {
   type        = string
   default     = null
 }
+
+variable "laminar_users" {
+  description = "Emails allowed through the login in front of the Laminar UI. Each gets an email with a temporary password. Nobody else can sign up."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for email in var.laminar_users : can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", email))])
+    error_message = "Every entry in laminar_users must be an email address."
+  }
+}
