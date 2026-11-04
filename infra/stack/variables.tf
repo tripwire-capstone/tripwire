@@ -67,6 +67,28 @@ variable "data_volume_snapshot_id" {
   default     = null
 }
 
+variable "data_snapshot_interval_hours" {
+  description = "Hours between scheduled snapshots of the data volume while the stack runs. At most this much ClickHouse and Quickwit data is lost if the volume fails."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = contains([1, 2, 3, 4, 6, 8, 12, 24], var.data_snapshot_interval_hours)
+    error_message = "data_snapshot_interval_hours must be one of 1, 2, 3, 4, 6, 8, 12 or 24 (the intervals Data Lifecycle Manager supports)."
+  }
+}
+
+variable "data_snapshot_retention_count" {
+  description = "How many scheduled snapshots of the data volume to keep; older ones are deleted. With hourly snapshots, 24 keeps one day."
+  type        = number
+  default     = 24
+
+  validation {
+    condition     = var.data_snapshot_retention_count >= 1 && var.data_snapshot_retention_count <= 1000
+    error_message = "data_snapshot_retention_count must be between 1 and 1000."
+  }
+}
+
 variable "laminar_users" {
   description = "Emails allowed through the login in front of the Laminar UI. Each gets an email with a temporary password. Nobody else can sign up."
   type        = list(string)

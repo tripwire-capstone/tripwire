@@ -62,6 +62,9 @@ resource "aws_ebs_volume" "data" {
 
   tags = {
     Name = "${var.name}-data"
+
+    # The scheduled snapshots in backups.tf find the volume by this tag
+    Backup = "${var.name}-data"
   }
 
   # Changing the snapshot later would replace live data with the old copy
