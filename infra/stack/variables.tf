@@ -48,3 +48,21 @@ variable "db_backup_retention_days" {
     error_message = "db_backup_retention_days must be between 1 and 35."
   }
 }
+
+variable "data_instance_type" {
+  description = "EC2 type for the ClickHouse + Quickwit box; needs at least 4 GB of memory. Free-plan accounts: use c7i-flex.large."
+  type        = string
+  default     = "t4g.medium"
+}
+
+variable "data_volume_size" {
+  description = "Size in GB of the encrypted volume that holds ClickHouse and Quickwit data."
+  type        = number
+  default     = 30
+}
+
+variable "data_volume_snapshot_id" {
+  description = "EBS snapshot to create the data volume from, e.g. the final snapshot of an earlier teardown. Leave null for an empty volume. Only read when the volume is first created."
+  type        = string
+  default     = null
+}

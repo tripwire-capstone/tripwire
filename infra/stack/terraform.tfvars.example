@@ -3,3 +3,10 @@
 
 # Restore the database from an earlier teardown's final snapshot (first create only)
 # db_snapshot_identifier = "tripwire-db-final-3f9a2c"
+
+# 4 GB minimum. Free-plan accounts: c7i-flex.large
+# data_instance_type = "t4g.medium"
+
+# Restore the data volume from an earlier teardown's final snapshot (first create only)
+# data_volume_snapshot_id = "snap-0123456789abcdef0"
+

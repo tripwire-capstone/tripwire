@@ -1,0 +1,48 @@
+#!/bin/bash
+# First boot only, as root. Log: /var/log/cloud-init-output.log
+set -euxo pipefail
+
+dnf install -y docker
+systemctl enable --now docker
+
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -fsSL "https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-linux-${compose_arch}" \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+# Terraform attaches the data volume just after the instance starts, so wait for it
+DEVICE=/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${volume_id}
+for attempt in $(seq 1 60); do
+  [ -e "$DEVICE" ] && break
+  sleep 5
+done
+
+# Format only a brand-new volume; a restored one already holds data
+if ! blkid "$DEVICE"; then
+  mkfs -t xfs "$DEVICE"
+fi
+mkdir -p /data
+echo "$DEVICE /data xfs defaults,nofail 0 2" >> /etc/fstab
+mount -a
+mkdir -p /data/clickhouse /data/clickhouse-logs /data/quickwit
+
+mkdir -p /opt/lmnr
+cat > /opt/lmnr/docker-compose.yml <<'EOF'
+${compose_file}
+EOF
+cat > /opt/lmnr/clickhouse-server-config.xml <<'EOF'
+${clickhouse_server_config}
+EOF
+cat > /opt/lmnr/clickhouse-profiles-config.xml <<'EOF'
+${clickhouse_profiles_config}
+EOF
+
+# The password comes from SSM through the instance role, so it is never in user data.
+set +x
+CLICKHOUSE_PASSWORD=$(aws ssm get-parameter --region ${region} --name ${clickhouse_password_parameter} \
+  --with-decryption --query Parameter.Value --output text)
+umask 077
+echo "CLICKHOUSE_PASSWORD=$CLICKHOUSE_PASSWORD" > /opt/lmnr/.env
+set -x
+cd /opt/lmnr
+docker compose up -d

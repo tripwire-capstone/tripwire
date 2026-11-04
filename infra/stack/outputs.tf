@@ -22,3 +22,13 @@ output "db_endpoint" {
   description = "Postgres host name, reachable only from inside the VPC."
   value       = aws_db_instance.main.address
 }
+
+output "data_box_instance_id" {
+  description = "ClickHouse + Quickwit box. Open a shell with: aws ssm start-session --target <id>"
+  value       = aws_instance.data.id
+}
+
+output "data_box_private_ip" {
+  description = "Private address the ECS tasks use for ClickHouse (8123) and Quickwit (7280, 7281)."
+  value       = aws_instance.data.private_ip
+}
