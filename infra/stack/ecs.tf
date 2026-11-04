@@ -27,6 +27,10 @@ locals {
     PGSSLMODE               = "require"
     QUICKWIT_INGEST_URL     = "http://${aws_instance.data.private_ip}:7281"
     QUICKWIT_SPANS_INDEX_ID = "spans_v2"
+
+    # The app-server uses this for notification links and to fetch the keys that verify CLI
+    # login tokens (src/auth/cli_user.rs); unset, both fall back to https://laminar.sh
+    NEXT_PUBLIC_URL = local.laminar_url
   })
 
   frontend_env = merge(local.laminar_common_env, {
