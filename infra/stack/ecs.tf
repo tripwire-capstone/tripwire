@@ -38,6 +38,12 @@ locals {
     NEXT_PUBLIC_URL            = local.laminar_url
     LAMINAR_TELEMETRY_DISABLED = "true"
     DATABASE_SSL_ROOT_CERT     = data.http.rds_ca.response_body
+
+    # The frontend runs the ClickHouse migrations, and its migration tool leaks one pooled
+    # connection per statement; with the default pool of 10 every tenth statement waits 30 s.
+    # A bigger pool takes first boot from about 14 minutes to seconds. Frontend only: the
+    # app-server uses a different (Rust) client that doesn't read this parameter.
+    CLICKHOUSE_URL = "http://${aws_instance.data.private_ip}:8123?max_open_connections=1000"
   })
 
   # Name inside the container => SSM parameter ARN; ECS reads them at task start

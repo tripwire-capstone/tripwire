@@ -17,6 +17,8 @@ services:
       - /data/clickhouse-logs:/var/log/clickhouse-server
       - ./clickhouse-profiles-config.xml:/etc/clickhouse-server/users.d/lmnr.xml:ro
       - ./clickhouse-server-config.xml:/etc/clickhouse-server/config.d/lmnr.xml:ro
+      - ./clickhouse-compat-config.xml:/etc/clickhouse-server/users.d/compat.xml:ro
+      - ./clickhouse-merge-tree-config.xml:/etc/clickhouse-server/config.d/merge-tree.xml:ro
 
   quickwit:
     image: quickwit/quickwit:${quickwit_version}

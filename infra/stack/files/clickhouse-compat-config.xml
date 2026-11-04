@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<!-- Mounted into users.d. ClickHouse 26.9+ compresses responses with ZSTD by default,
+     but Laminar's app-server (Rust clickhouse crate 0.15.1) only reads LZ4: without this,
+     every dashboard and SQL API query fails with "decompression error: incorrect magic number". -->
+<clickhouse>
+    <profiles>
+        <default>
+            <network_compression_method>LZ4</network_compression_method>
+        </default>
+    </profiles>
+</clickhouse>

@@ -36,6 +36,14 @@ EOF
 cat > /opt/lmnr/clickhouse-profiles-config.xml <<'EOF'
 ${clickhouse_profiles_config}
 EOF
+cat > /opt/lmnr/clickhouse-compat-config.xml <<'EOF'
+${clickhouse_compat_config}
+EOF
+cat > /opt/lmnr/clickhouse-merge-tree-config.xml <<'EOF'
+${clickhouse_merge_tree_config}
+EOF
+# ClickHouse refuses to start if a mounted config file isn't readable by its own user
+chmod 644 /opt/lmnr/clickhouse-*.xml
 
 # The password comes from SSM through the instance role, so it is never in user data.
 set +x

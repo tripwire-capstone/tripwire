@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<!-- Mounted into config.d. Laminar's spans table has a projection, and ClickHouse refuses
+     DELETE on such tables by default (lightweight_mutation_projection_mode = THROW), so
+     deleting traces fails. A table setting: it applies to tables created after it is set,
+     so it must be in place before Laminar's first boot. -->
+<clickhouse>
+    <merge_tree>
+        <lightweight_mutation_projection_mode>rebuild</lightweight_mutation_projection_mode>
+    </merge_tree>
+</clickhouse>

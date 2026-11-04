@@ -96,8 +96,11 @@ resource "aws_instance" "data" {
     clickhouse_password_parameter = aws_ssm_parameter.clickhouse_password.name
     clickhouse_server_config      = file("${path.module}/files/clickhouse-server-config.xml")
     clickhouse_profiles_config    = file("${path.module}/files/clickhouse-profiles-config.xml")
+    clickhouse_compat_config      = file("${path.module}/files/clickhouse-compat-config.xml")
+    clickhouse_merge_tree_config  = file("${path.module}/files/clickhouse-merge-tree-config.xml")
     compose_file = templatefile("${path.module}/files/docker-compose.yml.tftpl", {
-      clickhouse_version = "26.5"
+      # 26.10.3.7 has the fix for CVE-2026-116366 (unauthenticated RCE); Laminar's own 26.5 does not
+      clickhouse_version = "26.10.3.7"
       clickhouse_user    = "ch_user"
       quickwit_version   = "v0.9.1"
     })
