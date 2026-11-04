@@ -74,6 +74,7 @@ resource "aws_instance" "data" {
   ami                    = data.aws_ssm_parameter.al2023_ami.value
   instance_type          = var.data_instance_type
   subnet_id              = aws_subnet.private[local.azs[0]].id
+  private_ip             = cidrhost(local.private_subnets[local.azs[0]], 10)
   vpc_security_group_ids = [aws_security_group.data.id]
   iam_instance_profile   = aws_iam_instance_profile.data_box.name
 

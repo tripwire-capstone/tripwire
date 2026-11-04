@@ -32,3 +32,13 @@ output "data_box_private_ip" {
   description = "Private address the ECS tasks use for ClickHouse (8123) and Quickwit (7280, 7281)."
   value       = aws_instance.data.private_ip
 }
+
+output "alb_dns_name" {
+  description = "Load balancer's own AWS name. Only laminar_url gets past its 404, which is the point."
+  value       = aws_lb.main.dns_name
+}
+
+output "laminar_url" {
+  description = "Where Laminar is served."
+  value       = "https://${local.laminar_domain}"
+}
