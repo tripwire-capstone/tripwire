@@ -1,0 +1,4 @@
+domain = "laminar.example.com"
+
+# Uncomment if the domain already lives in a Route 53 zone in this account
+# zone_id = "Z0123456789ABCDEFGHIJ"
