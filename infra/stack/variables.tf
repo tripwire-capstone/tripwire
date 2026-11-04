@@ -77,3 +77,9 @@ variable "laminar_users" {
     error_message = "Every entry in laminar_users must be an email address."
   }
 }
+
+variable "laminar_version" {
+  description = "Laminar release for both the app-server and frontend images. They must always match."
+  type        = string
+  default     = "v0.3.3"
+}

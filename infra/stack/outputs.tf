@@ -42,3 +42,8 @@ output "laminar_url" {
   description = "Where Laminar is served."
   value       = "https://${local.laminar_domain}"
 }
+
+output "laminar_logs_command" {
+  description = "Follow both Laminar containers' logs."
+  value       = "aws logs tail ${aws_cloudwatch_log_group.laminar.name} --follow"
+}
