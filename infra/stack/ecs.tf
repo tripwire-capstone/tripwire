@@ -157,7 +157,7 @@ resource "aws_ecs_task_definition" "laminar" {
   container_definitions = jsonencode([
     {
       name      = "app-server"
-      image     = "ghcr.io/lmnr-ai/app-server:${var.laminar_version}"
+      image     = "ghcr.io/lmnr-ai/app-server:${var.laminar_version}@${var.laminar_image_digests.app_server}"
       essential = true
       portMappings = [
         { containerPort = 8000, protocol = "tcp" },
@@ -177,7 +177,7 @@ resource "aws_ecs_task_definition" "laminar" {
     },
     {
       name      = "frontend"
-      image     = "ghcr.io/lmnr-ai/frontend:${var.laminar_version}"
+      image     = "ghcr.io/lmnr-ai/frontend:${var.laminar_version}@${var.laminar_image_digests.frontend}"
       essential = true
       portMappings = [
         { containerPort = 5667, protocol = "tcp" },

@@ -105,3 +105,20 @@ variable "laminar_version" {
   type        = string
   default     = "v0.3.3"
 }
+
+variable "laminar_image_digests" {
+  description = "Image digests for laminar_version (multi-arch index digests from ghcr.io). The digest decides which image runs, so update both together with laminar_version."
+  type = object({
+    app_server = string
+    frontend   = string
+  })
+  default = {
+    app_server = "sha256:f98dade091979db2c2d24ce21dd30f9140aab9c4404afdff07a21f810dc30adf"
+    frontend   = "sha256:4b2b1b1b708b365a7c57cd4b22d6d3a6b6bb31db47c5b8bdb8a39cfbfc55374f"
+  }
+
+  validation {
+    condition     = alltrue([for digest in values(var.laminar_image_digests) : can(regex("^sha256:[a-f0-9]{64}$", digest))])
+    error_message = "Each digest must look like sha256: followed by 64 hex characters."
+  }
+}

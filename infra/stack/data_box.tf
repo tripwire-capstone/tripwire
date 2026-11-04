@@ -1,6 +1,27 @@
 locals {
   # The chip decides the machine image and the Docker Compose download
-  data_arch = contains(data.aws_ec2_instance_type.data.supported_architectures, "arm64") ? "arm64" : "x86_64"
+  data_arch    = contains(data.aws_ec2_instance_type.data.supported_architectures, "arm64") ? "arm64" : "x86_64"
+  compose_arch = local.data_arch == "arm64" ? "aarch64" : "x86_64"
+
+  # Tag and digest: the tag says which release, the digest guarantees the exact image even if
+  # the tag is re-published. Both digests are multi-arch indexes (amd64 and arm64).
+  data_box_images = {
+    # 26.10.3.7 has the fix for CVE-2026-116366 (unauthenticated RCE); Laminar's own 26.5 does not
+    clickhouse = "clickhouse/clickhouse-server:26.10.3.7@sha256:739e099abd1157390960a59e4532d21781d8fde57e6e4151cb920ea02c30b1ce"
+    quickwit   = "quickwit/quickwit:v0.9.1@sha256:3e0f079eb57dd5563f36a457e9a7a2963ff882316d6c77e3180ac3c59767a68f"
+  }
+
+  # From checksums.txt of the Docker Compose v2.29.7 release
+  compose_sha256 = {
+    aarch64 = "6e9fbd5daa20dca5d7d89145081ae8155d68ef2928b497d9f85b54fe0f9dbb2c"
+    x86_64  = "383ce6698cd5d5bbf958d2c8489ed75094e34a77d340404d9f32c4ae9e12baf0"
+  }
+
+  # Laminar's ClickHouse config files, unchanged from v0.3.2 through v0.3.3
+  laminar_config_sha256 = {
+    "clickhouse-server-config.xml"   = "ab8ae9e3707323e846b75a8b3881ea8f37850ddba4c6675a6cbdf05c0fc72969"
+    "clickhouse-profiles-config.xml" = "7cac53a693010ff5cf6f3258952f39afba7857f1858eec83684ca703a8bfe006"
+  }
 }
 
 data "aws_ec2_instance_type" "data" {
@@ -94,7 +115,8 @@ resource "aws_instance" "data" {
   user_data = templatefile("${path.module}/files/data_box_user_data.sh.tftpl", {
     region                        = var.region
     compose_version               = "v2.29.7"
-    compose_arch                  = local.data_arch == "arm64" ? "aarch64" : "x86_64"
+    compose_arch                  = local.compose_arch
+    compose_sha256                = local.compose_sha256[local.compose_arch]
     volume_id                     = replace(aws_ebs_volume.data.id, "-", "")
     clickhouse_password_parameter = aws_ssm_parameter.clickhouse_password.name
     clickhouse_server_config      = file("${path.module}/files/clickhouse-server-config.xml")
@@ -102,10 +124,9 @@ resource "aws_instance" "data" {
     clickhouse_compat_config      = file("${path.module}/files/clickhouse-compat-config.xml")
     clickhouse_merge_tree_config  = file("${path.module}/files/clickhouse-merge-tree-config.xml")
     compose_file = templatefile("${path.module}/files/docker-compose.yml.tftpl", {
-      # 26.10.3.7 has the fix for CVE-2026-116366 (unauthenticated RCE); Laminar's own 26.5 does not
-      clickhouse_version = "26.10.3.7"
-      clickhouse_user    = "ch_user"
-      quickwit_version   = "v0.9.1"
+      clickhouse_image = local.data_box_images.clickhouse
+      clickhouse_user  = "ch_user"
+      quickwit_image   = local.data_box_images.quickwit
     })
   })
 
@@ -119,6 +140,15 @@ resource "aws_instance" "data" {
   # A newer Amazon Linux image must not replace the running box on its own
   lifecycle {
     ignore_changes = [ami]
+
+    # Laminar's ClickHouse config files must be the released ones, not edited copies
+    precondition {
+      condition = alltrue([
+        for file_name, expected_sha256 in local.laminar_config_sha256 :
+        filesha256("${path.module}/files/${file_name}") == expected_sha256
+      ])
+      error_message = "files/clickhouse-server-config.xml or files/clickhouse-profiles-config.xml differs from Laminar's released copy."
+    }
   }
 }
 

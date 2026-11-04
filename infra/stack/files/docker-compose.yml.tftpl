@@ -1,7 +1,7 @@
 # Rendered by Terraform. A doubled dollar sign is left for Docker Compose to fill in from .env
 services:
   clickhouse:
-    image: clickhouse/clickhouse-server:${clickhouse_version}
+    image: ${clickhouse_image}
     restart: unless-stopped
     ports:
       - "8123:8123"
@@ -21,7 +21,7 @@ services:
       - ./clickhouse-merge-tree-config.xml:/etc/clickhouse-server/config.d/merge-tree.xml:ro
 
   quickwit:
-    image: quickwit/quickwit:${quickwit_version}
+    image: ${quickwit_image}
     restart: unless-stopped
     command: ["run"]
     ports:

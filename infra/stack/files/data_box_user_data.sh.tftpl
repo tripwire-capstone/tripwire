@@ -8,6 +8,8 @@ systemctl enable --now docker
 mkdir -p /usr/local/lib/docker/cli-plugins
 curl -fsSL "https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-linux-${compose_arch}" \
   -o /usr/local/lib/docker/cli-plugins/docker-compose
+# Refuse a download that isn't the released binary; set -e stops the script here
+echo "${compose_sha256}  /usr/local/lib/docker/cli-plugins/docker-compose" | sha256sum -c -
 chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
 # Terraform attaches the data volume just after the instance starts, so wait for it
