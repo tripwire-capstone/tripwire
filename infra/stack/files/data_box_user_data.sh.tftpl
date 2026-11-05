@@ -2,7 +2,6 @@
 # First boot only, as root. Log: /var/log/cloud-init-output.log
 set -euxo pipefail
 
-
 # Early steps race the new NAT, so the first tries can time out.
 # Runs a command 30 tries, 10s apart.
 retry() {
@@ -15,8 +14,6 @@ retry() {
 }
 
 retry dnf install -y docker
-
-dnf install -y docker
 systemctl enable --now docker
 
 mkdir -p /usr/local/lib/docker/cli-plugins
