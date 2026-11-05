@@ -4,7 +4,7 @@
 variable "mock_ui_image" {
   description = "Mock UI image pinned by digest, from the Mock UI image workflow's run summary."
   type        = string
-  default     = ""
+  default     = "ghcr.io/tripwire-capstone/mock-ui@sha256:4120368d5089f32a573b3732fd080d03f0a3dc5022a69bd5e924b6503fd907e3"
 
   validation {
     condition     = can(regex("^ghcr\\.io/[a-z0-9-]+/mock-ui@sha256:[a-f0-9]{64}$", var.mock_ui_image))
