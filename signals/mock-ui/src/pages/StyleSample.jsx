@@ -1,13 +1,12 @@
-import { Stack, Title, Text, Card, Group, Button, Table, SimpleGrid, TextInput, Textarea, Switch, Paper, Code } from '@mantine/core';
+import { Stack, Title, Text, Card, Group, Button, Table, SimpleGrid, TextInput, Textarea, Switch, Paper, Code, Anchor } from '@mantine/core';
 import PageHeader from '../components/PageHeader';
 import { SeverityBadge, KindBadge, StatusBadge, NotificationTypeBadge } from '../components/Badges';
 import { ActivitySparkline, EventsOverTimeChart } from '../components/Charts';
 import LaminarLink from '../components/LaminarLink';
-import { formatTime, formatDay } from '../components/format';
-import {
-  tripwires, tripwireSummary, eventsFor, eventsPerDay, topClusters, subClusters, eventsInCluster,
-  getCluster, notifications, getTripwire,
-} from '../mock/data';
+import { formatTime, formatDay, plural } from '../components/format';
+import { Link } from 'react-router-dom';
+import { useStoryData, useStoryDay } from '../components/StoryClock';
+import { tripwireUrl, notificationUrl } from '../components/links';
 
 // Reference page, not part of the product: every shared component with real mock data.
 // Pages should look like this. Change theme.js or src/components/, never this page, to change the look.
@@ -25,17 +24,22 @@ function Section({ title, note, children }) {
 }
 
 export default function StyleSample() {
+  const {
+    tripwires, tripwireSummary, eventsFor, eventsPerDay, topClusters, subClusters, eventsInCluster,
+    getCluster, notifications,
+  } = useStoryData();
+  const day = useStoryDay();
   const friction = 'friction-detector';
   const rows = tripwires.map((t) => tripwireSummary(t.id));
   const events = eventsFor(friction).slice(0, 4);
 
   return (
     <Stack gap="xl" maw={1100}>
-      <PageHeader title="Style sample" description="Every shared component, with the shared mock data. Not a product screen." />
+      <PageHeader title="Style sample" description={`Every shared component, with the shared mock data as of ${day.label}. Not a product screen.`} />
 
       <Section title="Buttons" note="Main action: filled. Secondary: light. Tertiary: subtle gray.">
         <Group>
-          <Button>New tripwire</Button>
+          <Button>New signal</Button>
           <Button variant="light">Run on past traces</Button>
           <Button variant="subtle" color="gray">Cancel</Button>
         </Group>
@@ -50,7 +54,7 @@ export default function StyleSample() {
         </Group>
       </Section>
 
-      <Section title="Tripwire cards" note="Card + ActivitySparkline (Home).">
+      <Section title="Signal cards" note="Card + ActivitySparkline (Home).">
         <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }}>
           {rows.filter((t) => ['friction-detector', 'failure-detector', 'made-up-park-facts'].includes(t.id)).map((t) => (
             <Card key={t.id} withBorder padding="lg">
@@ -61,7 +65,7 @@ export default function StyleSample() {
               <Group justify="space-between" align="flex-end">
                 <div>
                   <Text size="xl" fw={700}>{t.events}</Text>
-                  <Text size="xs" c="dimmed">tripwire events, last 7 days</Text>
+                  <Text size="xs" c="dimmed">events, last 7 days</Text>
                 </div>
                 <ActivitySparkline data={t.activity} w={110} h={40} />
               </Group>
@@ -70,7 +74,7 @@ export default function StyleSample() {
         </SimpleGrid>
       </Section>
 
-      <Section title="Tripwire table" note="Table (Tripwire list), Laminar's columns.">
+      <Section title="Signal table" note="Table (Signals list), Laminar's columns.">
         <Table.ScrollContainer minWidth={760}>
           <Table highlightOnHover verticalSpacing="sm">
             <Table.Thead>
@@ -83,7 +87,7 @@ export default function StyleSample() {
               {rows.map((t) => (
                 <Table.Tr key={t.id}>
                   <Table.Td><StatusBadge status={t.status} /></Table.Td>
-                  <Table.Td><Group gap="xs" wrap="nowrap"><Text size="sm" fw={500}>{t.name}</Text><KindBadge kind={t.kind} size="xs" /></Group></Table.Td>
+                  <Table.Td><Group gap="xs" wrap="nowrap"><Anchor component={Link} to={tripwireUrl(t.id)} size="sm" fw={500}>{t.name}</Anchor><KindBadge kind={t.kind} size="xs" /></Group></Table.Td>
                   <Table.Td>{t.events}</Table.Td>
                   <Table.Td>{t.clusters}</Table.Td>
                   <Table.Td><ActivitySparkline data={t.activity} /></Table.Td>
@@ -97,24 +101,24 @@ export default function StyleSample() {
         </Table.ScrollContainer>
       </Section>
 
-      <Section title="Events over time" note="EventsOverTimeChart (Tripwire detail). Friction Detector.">
+      <Section title="Events over time" note="EventsOverTimeChart (Signal detail). Friction Detector.">
         <EventsOverTimeChart data={eventsPerDay(friction)} />
       </Section>
 
-      <Section title="Cluster tree" note="Paper rows (Tripwire detail). Friction Detector.">
+      <Section title="Cluster tree" note="Paper rows (Signal detail). Friction Detector.">
         <Stack gap="xs" maw={760}>
           {topClusters(friction).map((top) => (
             <Paper key={top.id} withBorder p="sm">
               <Group justify="space-between" mb="xs">
                 <Text fw={600} size="sm">{top.name}</Text>
-                <Text size="xs" c="dimmed">{eventsInCluster(top.id).length} events</Text>
+                <Text size="xs" c="dimmed">{plural(eventsInCluster(top.id).length, 'event')}</Text>
               </Group>
               <Stack gap={6} pl="md" style={{ borderLeft: '2px solid var(--mantine-color-dark-4)' }}>
                 {subClusters(top.id).map((c) => (
                   <div key={c.id}>
                     <Group justify="space-between" wrap="nowrap" align="flex-start">
-                      <Text size="sm" fw={500}>{c.name}</Text>
-                      <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>{eventsInCluster(c.id).length} events</Text>
+                      <Anchor component={Link} to={tripwireUrl(friction, { clusterId: c.id })} size="sm" fw={500}>{c.name}</Anchor>
+                      <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>{plural(eventsInCluster(c.id).length, 'event')}</Text>
                     </Group>
                     <Text size="xs" c="dimmed">{c.summary}</Text>
                   </div>
@@ -125,7 +129,7 @@ export default function StyleSample() {
         </Stack>
       </Section>
 
-      <Section title="Events table" note="Table + SeverityBadge + LaminarLink (Tripwire detail).">
+      <Section title="Events table" note="Table + SeverityBadge + LaminarLink (Signal detail).">
         <Table.ScrollContainer minWidth={760}>
           <Table striped highlightOnHover verticalSpacing="sm">
             <Table.Thead>
@@ -150,12 +154,12 @@ export default function StyleSample() {
         </Table.ScrollContainer>
       </Section>
 
-      <Section title="Form fields" note="Inputs (New tripwire).">
+      <Section title="Form fields" note="Inputs (New signal).">
         <Card withBorder padding="lg" maw={640}>
           <Stack>
             <TextInput id="ss-name" label="Name" defaultValue="Made-up park facts" />
-            <Textarea id="ss-instruction" label="What should this tripwire look for?" autosize minRows={2}
-              defaultValue={getTripwire('made-up-park-facts').instruction} />
+            <Textarea id="ss-instruction" label="What should this signal look for?" autosize minRows={2}
+              defaultValue="Find replies that state park facts (trail lengths, hours, fees, amenities) that the tool outputs don't support." />
             <Group grow>
               <TextInput id="ss-filter" label="Only read traces where" defaultValue="metadata.app_version starts with v1.4" />
               <TextInput id="ss-sample" label="Sample rate" defaultValue="100%" />
@@ -163,7 +167,7 @@ export default function StyleSample() {
             <Switch id="ss-backfill" label="Run on past traces (last 14 days)" defaultChecked />
             <Group justify="flex-end">
               <Button variant="subtle" color="gray">Cancel</Button>
-              <Button>Create tripwire</Button>
+              <Button>Create signal</Button>
             </Group>
           </Stack>
         </Card>
@@ -175,7 +179,7 @@ export default function StyleSample() {
             <Paper key={n.id} withBorder p="sm">
               <Group gap="xs">
                 <NotificationTypeBadge type={n.type} />
-                <Text size="sm" fw={n.read ? 400 : 600}>{n.text}</Text>
+                <Anchor component={Link} to={notificationUrl(n)} size="sm" fw={n.read ? 400 : 600} c="inherit">{n.text}</Anchor>
               </Group>
               <Text size="xs" c="dimmed" mt={4}>{formatTime(n.time)}</Text>
             </Paper>

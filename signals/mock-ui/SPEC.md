@@ -4,16 +4,20 @@
 
 A clickable React mock of Tripwire's agreed core features, running on fake data, for the demo on Nov 5, 2026. Not connected to Laminar or our services. 
 
+## Terms
+
+"Tripwire" is the product name (header only). In the UI: **signal**, **event** (signal event), **cluster**. Decided Nov 4; may change.
+
 ## Screens
 
 Five screens, agreed Nov 4. Each follows Laminar where Laminar has the same thing. Reports are not decided yet, so no screen for them.
 
 | Screen | Route | Shows |
 | --- | --- | --- |
-| Home | `/` | Dashboard, readable at a glance: tripwires that are spiking, newly formed clusters, recent critical tripwire events, unread notifications. Each item links to its tripwire or cluster. |
-| Tripwire list | `/tripwires` | Modeled on Laminar's Signals list: table with Status, Name, Events, Clusters, Activity (sparkline), Last event, Runs, Created. Search by name, time range (default 7 days), "New tripwire" button. Click a row to open its detail. |
-| New tripwire | `/tripwires/new` | Start from a preset or blank; name; plain-language instruction; payload fields (name + description each); trigger filters and sample rate (which traces it reads); test on a sample trace (pick a trace, see the event it would produce); run on past traces (backfill); Create. |
-| Tripwire detail | `/tripwires/:id` | Events-over-time chart; cluster tree (broad clusters that open into sub-clusters; click one to filter); tripwire events table with severity, payload fields, time, app version filter, "Open in Laminar" per event. |
+| Home | `/` | A fixed dashboard for signals, built from Laminar's dashboard card types (not customizable). Top bar: time range (default 24 hours), By hour / By day (default: hour up to 7 days, day beyond), Refresh. "Problem" = critical or warning, so signals that produce an event for every trace don't turn event cards into a traffic count. Cards: **Problem events by signal**, **Top problem clusters**, **Signal run cost** (ranked lists, top 5 by the card's number in the range; ties by name; zeros hidden; "View all signals →"), **Problem events over time** (top 5 signals + Other; legend items hide/show lines, ↗ opens the signal), **What visitors asked for** (Intent Classifier's clusters with share; only when a signal made from the Intent template exists), **Signal runs (all signals)** (each run = one signal reading one trace; found an event / found nothing / failed, with a tooltip on Failed). Works with any set of signals; only Failure Detector is created by default in Laminar. Rows and legend links open the signal on the same time range. |
+| Signals list | `/signals` | Modeled on Laminar's Signals list: table with Status, Name, Events, Clusters, Activity (sparkline), Last event, Runs, Created. Search by name, time range (default 7 days), "New tripwire" button. Click a row to open its detail. |
+| New signal | `/signals/new` | Start from a preset or blank; name; plain-language instruction; payload fields (name + description each); trigger filters and sample rate (which traces it reads); test on a sample trace (pick a trace, see the event it would produce); run on past traces (backfill); Create. |
+| Signal detail | `/signals/:id` | Modeled on Laminar's Signal page. Tabs: **Events** (cluster strip with drill-down into sub-clusters; stacked events-over-time bars by cluster, gray = not in a cluster; app version markers; Add filter, Columns, Refresh; search; table of Timestamp, Severity, the tripwire's payload fields, Trace ID (opens Laminar), ID; row opens an event panel), **Runs** (runs chart: event / no event / failed, total; table of Status, Source, Event, Clusters, Cost, Updated at, Event ID), **Settings** (Laminar's sections: General / Versions / Alerts / Backfill; all placeholders for now. General will be the shared signal form in edit mode). Time range picker on Events and Runs (default: past 3 days): typed duration, presets, absolute dates; bar size follows the range. |
 | Notifications | `/notifications` + bell in the header | In-app list of both alert types; alert settings per tripwire: new cluster on/off, new critical event on/off, "skip similar events" on/off, Slack on/off; a mock Slack message. |
 
 Not screens: sync, backfill jobs, reliability and AWS deployment. The demo can mention them while showing the screens.
@@ -48,16 +52,29 @@ Every screen reads one file, `mock-ui/src/mock/data.js`. Proposed story: the Oly
 
 | Object | Fields |
 | --- | --- |
-| tripwire | id, name, kind (preset / custom), status (active / paused), instruction, payloadFields \[{name, description}\], triggerFilters, sampleRate, alerts {newCluster, newCriticalEvent, skipSimilar, slack}, createdAt |
+| tripwire | id, name, kind (preset / custom), status, createdAt, templateId, instruction, payloadFields [{name, description, type, choices}], trigger (trace / span) + spanName, filters [{field, operator, value}], sampling (%), alerts {newCluster, newCriticalEvent, skipSimilar, slack}, backfill? |
 | tripwireEvent | id, tripwireId, traceId, conversationId, time, appVersion, severity (critical / warning / info), payload {…}, excerpt (visitor message + reply), clusterId |
 | cluster | id, tripwireId, parentId (null for top level), name, summary |
-| run | per tripwire per day: traces read, events produced (feeds Runs and Activity) |
+| run | id, tripwireId, traceId, time, source (trigger / backfill), status (completed / failed), eventId (null = no event), clusterId, cost |
+| tripwireTemplate | the 6 Laminar templates (Failure, Logic, Task, Friction, Hallucination, Intent): instruction + payloadFields; preset tripwires use them |
+| sampleTrace | scripted traces for "Test on a sample trace", with each template's result |
+| version | app version + when it was first seen (version markers on charts) |
 | notification | id, time, type (new cluster / new critical event), tripwireId, clusterId, text, read |
 
-Tripwires on the list: Failure Detector, Friction Detector, Intent Classifier, Task Evaluator (Laminar's presets), plus the custom "Made-up park facts". Intent Classifier and Task Evaluator produce an event for every trace they read, as in Laminar.
+Tripwires on the list: Failure Detector, Friction Detector, Intent Classifier, Task Evaluator (Laminar's presets), plus the custom "Made-up park facts". Intent Classifier and Task Evaluator produce an event for every trace they read, as in Laminar. Task Evaluator samples 20% of traces to keep its cost down.
+
+## Story day and links
+
+- **Story day picker** (header): Day 1 (Oct 29, 6 pm), Day 3 (Oct 31, 6 pm), Day 6 (Nov 3, 6 pm), Today (Nov 4, 9:30 am).
+  Every screen shows only what had happened by then. A demo control, not a product feature. A notification is unread for 48 hours.
+- **Developer's path** the screens must support: notification → Signal detail with that cluster selected and the event
+  highlighted → "Open in Laminar".
+- **Signal detail URL:** `/signals/<id>?cluster=<clusterId>&event=<eventId>` (both optional). Build links with
+  `src/components/links.js`.
 
 ## Where things are in the code
 
-- Data and helpers: `src/mock/data.js` (`tripwireSummary`, `eventsFor`, `eventsPerDay`, `topClusters`, `subClusters`, `eventsInCluster`, `notifications`, `laminarTraceUrl`, ...).
-- Shared components: `src/components/` (`AppLayout`, `PageHeader`, `Badges`, `Charts`, `LaminarLink`, `format`).
+- Data: `src/mock/data.js`. Pages read it with `useStoryData()` (`src/components/StoryClock.jsx`): `tripwireSummary`, `eventsFor`, `eventsPerDay`, `topClusters`, `subClusters`, `eventsInCluster`, `notifications`, `unreadCount`, ...
+- Links: `src/components/links.js`.
+- Shared components: `src/components/` (`AppLayout`, `PageHeader`, `Badges`, `Charts`, `LaminarLink`, `StoryClock`, `format`).
 - Reference page with every component: `/style` (`src/pages/StyleSample.jsx`).
