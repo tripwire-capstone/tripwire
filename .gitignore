@@ -20,4 +20,4 @@ override.tf.json
 *_override.tf
 *_override.tf.json
 # Working notes, kept local for now
-docs/
+/docs/
