@@ -1,23 +1,18 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
 import * as p from "@clack/prompts";
 import { Command } from "commander";
+import { deploy } from "./commands/deploy.js";
 import { init } from "./commands/init.js";
 import { UserError } from "./errors.js";
 import { CommandError } from "./run.js";
-
-// Read our own version from package.json. The path works from both src/ (tsx) and dist/ (built),
-// since each is one folder below cli/.
-const pkg = JSON.parse(
-  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-) as { version: string };
+import { CLI_VERSION } from "./version.js";
 
 const program = new Command();
 
 program
   .name("tripwire")
   .description("Deploy Tripwire and self-hosted Laminar to your own AWS account")
-  .version(pkg.version);
+  .version(CLI_VERSION);
 
 program
   .command("init")
@@ -30,9 +25,7 @@ program
   .option("--lite", "deploy in Lite mode")
   .option("--fresh", "start with empty data instead of restoring from snapshots")
   .option("-y, --yes", "skip the confirmation question")
-  .action((options) => {
-    console.log("deploy: not built yet", options);
-  });
+  .action(deploy);
 
 program
   .command("destroy")

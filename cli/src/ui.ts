@@ -15,7 +15,7 @@ export async function step<T>(
   fn: () => Promise<T>,
   done?: (result: T) => string,
 ): Promise<T> {
-  const spin = p.spinner();
+  const spin = p.spinner({ indicator: "timer" });
   spin.start(message);
   try {
     const result = await fn();

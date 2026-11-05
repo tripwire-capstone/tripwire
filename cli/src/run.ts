@@ -30,16 +30,18 @@ interface RunOptions {
   cwd?: string;
   // false for output with secrets
   logStdout?: boolean;
+  // Exit codes besides 0 that aren't failures
+  okExitCodes?: number[];
 }
 
-// Runs a program and logs its output
-export async function run(
+// Runs a program and logs its output; returns stdout and exit code
+export async function runWithExitCode(
   log: Log,
   file: string,
   args: string[],
   options: RunOptions = {},
-): Promise<string> {
-  const { cwd, logStdout = true } = options;
+): Promise<{ stdout: string; exitCode: number }> {
+  const { cwd, logStdout = true, okExitCodes = [] } = options;
   log.write(`\n$ ${file} ${args.join(" ")}\n${cwd ? `  (in ${cwd})\n` : ""}`);
 
   const toLog = { file: log.path, append: true };
@@ -51,10 +53,21 @@ export async function run(
     stderr: ["pipe", toLog],
   });
 
-  if (result.failed) {
+  const exitCode = result.exitCode ?? -1;
+  if (result.failed && !okExitCodes.includes(exitCode)) {
     throw new CommandError(
       `${result.shortMessage ?? `${file} failed`}\n\n${log.tail(20)}\n\nFull log: ${log.path}`,
     );
   }
-  return result.stdout;
+  return { stdout: result.stdout, exitCode };
+}
+
+// Runs a program and logs its output; returns stdout
+export async function run(
+  log: Log,
+  file: string,
+  args: string[],
+  options: RunOptions = {},
+): Promise<string> {
+  return (await runWithExitCode(log, file, args, options)).stdout;
 }

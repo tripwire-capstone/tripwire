@@ -14,10 +14,6 @@ const REGIONS = ["us-east-1", "us-east-2", "us-west-2", "eu-west-1", "eu-central
 const DOMAIN = /^([a-z0-9-]+\.)+[a-z]{2,}$/;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export function splitEmails(text: string): string[] {
-  return text.split(",").map((e) => e.trim()).filter(Boolean);
-}
-
 async function askRegion(log: Log, current?: string): Promise<string> {
   const listed = !current || REGIONS.includes(current);
   const choice = answer(
@@ -113,15 +109,14 @@ export async function init(): Promise<void> {
     laminarUsers = saved.laminarUsers;
     p.log.info("Logins unchanged. Use `tripwire users` to change them.");
   } else {
-    const extra = answer(
+    const loginEmail = answer(
       await p.text({
-        message: `Other emails that can log in (${alertEmail} can already)`,
-        placeholder: "Comma-separated, or leave empty",
-        validate: (v) =>
-          splitEmails(v ?? "").every((e) => EMAIL.test(e)) ? undefined : "Use emails separated by commas",
+        message: "Email to log in to Laminar",
+        initialValue: alertEmail,
+        validate: (v) => (v && EMAIL.test(v) ? undefined : "Enter an email address"),
       }),
     );
-    laminarUsers = [...new Set([alertEmail, ...splitEmails(extra ?? "")])];
+    laminarUsers = [loginEmail];
   }
 
   let freePlan = await step("Checking your AWS plan", () => getFreePlan(log), (free) =>
