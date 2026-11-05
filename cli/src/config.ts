@@ -8,6 +8,7 @@ export interface TripwireConfig {
   accountId: string;
   region: string;
   domain: string;
+  zoneId: string | null;
   alertEmail: string;
   laminarUsers: string[];
   freePlan: boolean;

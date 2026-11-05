@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
+import * as p from "@clack/prompts";
 import { Command } from "commander";
+import { init } from "./commands/init.js";
+import { UserError } from "./errors.js";
+import { CommandError } from "./run.js";
 
 // Read our own version from package.json. The path works from both src/ (tsx) and dist/ (built),
 // since each is one folder below cli/.
@@ -18,9 +22,7 @@ program
 program
   .command("init")
   .description("Check your tools and AWS login, then ask the setup questions")
-  .action(() => {
-    console.log("init: not built yet");
-  });
+  .action(init);
 
 program
   .command("deploy")
@@ -40,4 +42,13 @@ program
     console.log("destroy: not built yet", options);
   });
 
-await program.parseAsync();
+try {
+  await program.parseAsync();
+} catch (err) {
+  if (err instanceof UserError || err instanceof CommandError) {
+    p.cancel(err.message);
+    process.exitCode = 1;
+  } else {
+    throw err;
+  }
+}
