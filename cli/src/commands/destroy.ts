@@ -13,7 +13,8 @@ import {
   planRotation,
   waitForSet,
 } from "../snapshots.js";
-import { discardPlan, tfApply, tfInit, tfPlan, tfPlanJson, writeSettings } from "../terraform.js";
+import { applyWithProgress } from "../applyProgress.js";
+import { discardPlan, tfInit, tfPlan, tfPlanJson, writeSettings } from "../terraform.js";
 import { answer, step } from "../ui.js";
 
 export interface DestroyOptions {
@@ -35,7 +36,7 @@ export async function destroy(options: DestroyOptions): Promise<void> {
   await syncInfra(bundledInfraDir(), deploymentDir());
   await writeSettings(config);
 
-  const changed = await step("stack: planning", async () => {
+  const changed = await step("Checking what to remove", async () => {
     await tfInit(log, "stack");
     return tfPlan(log, "stack", ["-destroy"]);
   });
@@ -74,7 +75,13 @@ export async function destroy(options: DestroyOptions): Promise<void> {
     );
   }
 
-  await step("stack: destroying", () => tfApply(log, "stack"), () => "stack: destroyed");
+  await applyWithProgress(log, "stack", plan, {
+    title: "Removing Laminar",
+    action: "remove",
+    estimate: "usually about 10 minutes",
+    usualSeconds: 15 * 60,
+    hint: "Run `tripwire destroy` again to continue where it stopped.",
+  });
 
   const after = await listSnapshots(log, config.region);
   const rotation = planRotation(before, after);

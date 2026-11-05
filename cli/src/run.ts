@@ -43,6 +43,9 @@ interface RunOptions {
   logStdout?: boolean;
   // Exit codes besides 0 that aren't failures
   okExitCodes?: number[];
+  // Called with each stdout line as it arrives; what it returns is logged (and returned) instead
+  // of the line, undefined drops it
+  onLine?: (line: string) => string | undefined;
 }
 
 // Runs a program and logs its output; returns stdout and exit code
@@ -52,15 +55,29 @@ export async function runWithExitCode(
   args: string[],
   options: RunOptions = {},
 ): Promise<{ stdout: string; exitCode: number }> {
-  const { cwd, logStdout = true, okExitCodes = [] } = options;
+  const { cwd, logStdout = true, okExitCodes = [], onLine } = options;
   log.write(`\n$ ${file} ${args.join(" ")}\n${cwd ? `  (in ${cwd})\n` : ""}`);
 
   const toLog = { file: log.path, append: true };
+  // execa's file target gets the raw line even after a transform, so with onLine we log ourselves
+  const stdout = onLine
+    ? [
+        function* (line: string) {
+          const replacement = onLine(line);
+          if (replacement === undefined) return;
+          if (logStdout) log.write(`${replacement}\n`);
+          yield replacement;
+        },
+        "pipe" as const,
+      ]
+    : logStdout
+      ? (["pipe", toLog] as const)
+      : ("pipe" as const);
   const result = await execa(file, args, {
     cwd,
     reject: false,
     env: { TF_IN_AUTOMATION: "1" },
-    stdout: logStdout ? ["pipe", toLog] : "pipe",
+    stdout,
     stderr: ["pipe", toLog],
   });
 

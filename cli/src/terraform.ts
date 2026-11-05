@@ -2,7 +2,8 @@ import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { TripwireConfig } from "./config.js";
 import { deploymentDir } from "./paths.js";
-import { run, runWithExitCode, type Log } from "./run.js";
+import { CommandError, run, runWithExitCode, type Log } from "./run.js";
+import { parseTerraformEvent, type TerraformEvent } from "./tfEvents.js";
 import { buildBackendHcl, buildTfvars, type Restore, type StackName } from "./tfvars.js";
 
 export const STACKS: StackName[] = ["bootstrap", "persistent", "stack"];
@@ -24,7 +25,8 @@ export interface State {
 }
 
 export interface Plan {
-  resource_changes?: { address: string; change: { actions: string[] } }[];
+  // type is the resource type, e.g. aws_db_instance
+  resource_changes?: { address: string; type?: string; change: { actions: string[] } }[];
 }
 
 export function stackDir(stack: StackName): string {
@@ -67,14 +69,45 @@ export async function tfPlanJson(log: Log, stack: StackName): Promise<Plan> {
   return JSON.parse(out) as Plan;
 }
 
-export async function tfApply(log: Log, stack: StackName): Promise<void> {
+// Applies the saved plan. With onEvent, Terraform reports progress as JSON events; the log
+// still gets Terraform's normal text, and a failure shows Terraform's own error.
+export async function tfApply(
+  log: Log,
+  stack: StackName,
+  onEvent?: (event: TerraformEvent) => void,
+): Promise<void> {
+  const errors: TerraformEvent[] = [];
+  const onLine = onEvent
+    ? (line: string) => {
+        const event = parseTerraformEvent(line);
+        if (!event) return line;
+        if (event.type === "diagnostic" && event.severity === "error") errors.push(event);
+        onEvent(event);
+        return event.message;
+      }
+    : undefined;
+
   try {
-    await run(log, "terraform", ["apply", "-input=false", "-no-color", "tfplan"], {
+    await run(log, "terraform", ["apply", "-input=false", "-no-color", ...(onEvent ? ["-json"] : []), "tfplan"], {
       cwd: stackDir(stack),
+      onLine,
     });
+  } catch (err) {
+    if (err instanceof CommandError && errors.length > 0) {
+      throw new CommandError(`${applyErrorMessage(errors)}\n\nFull log: ${log.path}`, err.stderr);
+    }
+    throw err;
   } finally {
     await discardPlan(stack);
   }
+}
+
+// Terraform's error diagnostics as one message: summary, then detail, per error
+export function applyErrorMessage(errors: TerraformEvent[]): string {
+  return errors
+    .filter((event) => event.type === "diagnostic")
+    .map((event) => (event.detail ? `${event.summary}\n${event.detail}` : event.summary))
+    .join("\n\n");
 }
 
 // Plan files can hold secrets
