@@ -1,0 +1,23 @@
+/* Live tab. Builds on styles.css; only what the Live view adds.
+   styles.css loads after this file, so overrides of its classes need a more specific selector. */
+
+.nav-tab { position: relative; display: inline-flex; align-items: center; border: 0; background: transparent; color: var(--muted); font-size: 13px; padding: 0; }
+.nav-tab + .nav-tab { margin-left: 24px; }
+.nav-tab:hover { color: var(--ink); }
+.nav-tab[aria-current='page'] { color: var(--ink); }
+.nav-tab[aria-current='page']::after { content: ''; position: absolute; bottom: -1px; left: 0; right: 0; height: 2px; background: var(--accent); }
+
+.live-status { color: var(--muted); font-size: 11px; }
+.results-notice code { font-size: 11px; }
+
+.live-table th:nth-child(1) { width: 70%; }
+.live-table th:nth-child(2) { width: 15%; }
+.live-table th:nth-child(3) { width: 15%; }
+.live-table { min-width: 640px; }
+
+.live-match td { background: var(--miss-soft); }
+.live-match td:first-child { box-shadow: inset 3px 0 0 var(--miss); }
+.outcome.outcome-match { color: var(--miss); background: #f5e2b8; }
+
+a.context-toggle { text-decoration: none; }
+a.context-toggle:hover { text-decoration: underline; }

@@ -1,0 +1,8 @@
+# Keep secrets and local installs out of the image.
+.env
+.git
+.venv
+venv
+**/__pycache__
+frontend
+eval/reports
