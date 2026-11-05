@@ -1,0 +1,30 @@
+{
+  "name": "tripwire-cli",
+  "version": "0.1.0",
+  "description": "Deploy Tripwire and self-hosted Laminar to your own AWS account",
+  "type": "module",
+  "bin": {
+    "tripwire": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "infra"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.8.1",
+    "commander": "^15.0.0",
+    "execa": "^10.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
