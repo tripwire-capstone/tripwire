@@ -1,6 +1,6 @@
 import { UserError } from "./errors.js";
 import { DEPLOYMENT_NAME } from "./paths.js";
-import { run, type Log } from "./run.js";
+import { CommandError, run, type Log } from "./run.js";
 
 export interface DbSnapshot {
   id: string;
@@ -94,12 +94,25 @@ export async function listSnapshots(log: Log, region: string): Promise<Snapshots
   };
 }
 
+// aws wait gives up after a set time; keep going unless it really failed
+async function waitLonger(log: Log, args: string[]): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await run(log, "aws", args);
+      return;
+    } catch (err) {
+      const timedOut = err instanceof CommandError && err.message.includes("Max attempts exceeded");
+      if (!timedOut || attempt === 3) throw err;
+    }
+  }
+}
+
 export async function waitForSet(log: Log, region: string, set: SnapshotSet): Promise<void> {
-  await run(log, "aws", [
+  await waitLonger(log, [
     "rds", "wait", "db-snapshot-available",
     "--db-snapshot-identifier", set.db.id, "--region", region,
   ]);
-  await run(log, "aws", [
+  await waitLonger(log, [
     "ec2", "wait", "snapshot-completed", "--snapshot-ids", set.volume.id, "--region", region,
   ]);
 }

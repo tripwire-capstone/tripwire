@@ -4,6 +4,7 @@ import { bucketExists } from "../bootstrap.js";
 import { checkLogin } from "../checks.js";
 import { readConfig, writeConfig, type TripwireConfig } from "../config.js";
 import { publicNameServers, sameNameServers } from "../dns.js";
+import { waitForLaminar } from "../ecs.js";
 import { UserError } from "../errors.js";
 import { syncInfra } from "../infra.js";
 import { bundledInfraDir, deploymentDir } from "../paths.js";
@@ -199,6 +200,11 @@ export async function deploy(options: DeployOptions): Promise<void> {
   await applyStack(log, "bootstrap", yes);
   await deployPersistent(log, config, yes);
   await applyStack(log, "stack", yes);
+  await step(
+    "Waiting for Laminar to start",
+    () => waitForLaminar(log, config.region),
+    () => "Laminar is running",
+  );
 
   const outputs = await tfOutputs(log, "stack");
   await writeConfig({

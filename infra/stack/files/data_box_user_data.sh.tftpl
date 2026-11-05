@@ -2,6 +2,20 @@
 # First boot only, as root. Log: /var/log/cloud-init-output.log
 set -euxo pipefail
 
+
+# Early steps race the new NAT, so the first tries can time out.
+# Runs a command 30 tries, 10s apart.
+retry() {
+  for attempt in $(seq 1 30); do
+    "$@" && return 0
+    echo "Attempt $attempt failed: $*" >&2
+    sleep 10
+  done
+  return 1
+}
+
+retry dnf install -y docker
+
 dnf install -y docker
 systemctl enable --now docker
 
@@ -51,10 +65,10 @@ chmod 644 /opt/lmnr/clickhouse-*.xml
 
 # The password comes from SSM through the instance role, so it is never in user data.
 set +x
-CLICKHOUSE_PASSWORD=$(aws ssm get-parameter --region ${region} --name ${clickhouse_password_parameter} \
+CLICKHOUSE_PASSWORD=$(retry aws ssm get-parameter --region ${region} --name ${clickhouse_password_parameter} \
   --with-decryption --query Parameter.Value --output text)
 umask 077
 echo "CLICKHOUSE_PASSWORD=$CLICKHOUSE_PASSWORD" > /opt/lmnr/.env
 set -x
 cd /opt/lmnr
-docker compose up -d
+retry docker compose up -d
