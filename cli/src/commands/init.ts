@@ -1,8 +1,12 @@
+import { join } from "node:path";
 import * as p from "@clack/prompts";
 import { findExistingZone, getFreePlan, listRegions } from "../aws.js";
+import { adoptStateBucket } from "../bootstrap.js";
 import { checkTerraform, getAccountId } from "../checks.js";
-import { configPath, readConfig, writeConfig } from "../config.js";
+import { configPath, readConfig, writeConfig, type TripwireConfig } from "../config.js";
 import { UserError } from "../errors.js";
+import { syncInfra } from "../infra.js";
+import { bundledInfraDir, deploymentDir } from "../paths.js";
 import { Log } from "../run.js";
 import { answer, step } from "../ui.js";
 
@@ -132,7 +136,7 @@ export async function init(): Promise<void> {
     p.log.info("Free plan: backups kept 1 day, data box is c7i-flex.large.");
   }
 
-  await writeConfig({
+  const config: TripwireConfig = {
     accountId,
     region,
     domain,
@@ -141,7 +145,20 @@ export async function init(): Promise<void> {
     laminarUsers,
     freePlan,
     lastDeploy: saved?.lastDeploy,
-  });
+  };
+  await writeConfig(config);
+
+  await syncInfra(bundledInfraDir(), deploymentDir());
+  await step(
+    "Looking for an existing deployment",
+    () => adoptStateBucket(log, join(deploymentDir(), "bootstrap"), config),
+    (imported) =>
+      imported === null
+        ? "No existing deployment, deploy will create one"
+        : imported.length > 0
+          ? "Found an existing deployment and took over its state bucket"
+          : "State bucket already managed here",
+  );
 
   p.outro(`Saved ${configPath()}\nNext: tripwire deploy --lite`);
 }
