@@ -14,9 +14,9 @@ export default function App() {
     <Routes>
       <Route element={<AppLayout />}>
         <Route path="/" element={<Home />} />
-        <Route path="/tripwires" element={<TripwireList />} />
-        <Route path="/tripwires/new" element={<NewTripwire />} />
-        <Route path="/tripwires/:id" element={<TripwireDetail />} />
+        <Route path="/signals" element={<TripwireList />} />
+        <Route path="/signals/new" element={<NewTripwire />} />
+        <Route path="/signals/:id" element={<TripwireDetail />} />
         <Route path="/notifications" element={<Notifications />} />
         <Route path="/style" element={<StyleSample />} />
         <Route path="*" element={<NotFound />} />

@@ -1,12 +1,13 @@
 import { AppShell, Burger, Group, Title, NavLink as MantineNavLink, Indicator, ActionIcon, Badge } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { unreadCount } from '../mock/data';
+import { useStoryData, StoryDayPicker } from './StoryClock';
+import { homeUrl, tripwireListUrl, notificationsUrl } from './links';
 
 const NAV = [
-  { to: '/', label: 'Home', end: true },
-  { to: '/tripwires', label: 'Tripwires' },
-  { to: '/notifications', label: 'Notifications' },
+  { to: homeUrl(), label: 'Home', end: true },
+  { to: tripwireListUrl(), label: 'Signals' },
+  { to: notificationsUrl(), label: 'Notifications' },
 ];
 
 function BellIcon() {
@@ -21,7 +22,7 @@ function BellIcon() {
 export default function AppLayout() {
   const [opened, { toggle, close }] = useDisclosure();
   const navigate = useNavigate();
-  const unread = unreadCount();
+  const unread = useStoryData().unreadCount();
 
   return (
     <AppShell header={{ height: 56 }} navbar={{ width: 220, breakpoint: 'sm', collapsed: { mobile: !opened } }} padding="lg">
@@ -32,11 +33,14 @@ export default function AppLayout() {
             <Title order={4}>Tripwire</Title>
             <Badge variant="light" color="gray">Mock</Badge>
           </Group>
+          <Group gap="md" wrap="nowrap">
+          <StoryDayPicker />
           <Indicator label={unread} size={16} disabled={!unread} color="red">
-            <ActionIcon variant="subtle" color="gray" size="lg" aria-label="Notifications" onClick={() => navigate('/notifications')}>
+            <ActionIcon variant="subtle" color="gray" size="lg" aria-label="Notifications" onClick={() => navigate(notificationsUrl())}>
               <BellIcon />
             </ActionIcon>
           </Indicator>
+          </Group>
         </Group>
       </AppShell.Header>
 

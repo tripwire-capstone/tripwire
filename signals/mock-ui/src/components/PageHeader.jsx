@@ -2,7 +2,7 @@ import { Group, Title, Text, Breadcrumbs, Anchor } from '@mantine/core';
 import { Link } from 'react-router-dom';
 
 // Title row at the top of every page. `crumbs` is an optional [{ label, to }] trail,
-// `actions` sits on the right (e.g. a "New tripwire" button).
+// `actions` sits on the right (e.g. a "New signal" button).
 export default function PageHeader({ title, description, crumbs, actions }) {
   return (
     <div style={{ marginBottom: 'var(--mantine-spacing-lg)' }}>

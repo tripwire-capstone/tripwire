@@ -10,7 +10,9 @@ npm run dev        # http://localhost:5174
 
 - What each screen shows: `SPEC.md`. Rules for AI coding agents (and us): `AGENTS.md`.
 - Visual reference with every shared component: http://localhost:5174/style
-- Fake data (the Olympic story): `src/mock/data.js`.
+- Fake data (the Olympic story): `src/mock/data.js`. Pages read it through `useStoryData()`, so the
+  **Story day** picker in the header (Day 1 / Day 3 / Day 6 / Today) changes every screen at once.
+- Links between screens: `src/components/links.js`.
 
 ## How we work
 
