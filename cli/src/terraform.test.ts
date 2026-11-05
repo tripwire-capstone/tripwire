@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { sameNameServers } from "./dns.js";
-import { dataLosses, findResource, type Plan, type State } from "./terraform.js";
+import { applyErrorMessage, dataLosses, findResource, type Plan, type State } from "./terraform.js";
 
 function plan(changes: Record<string, string[]>): Plan {
   return {
@@ -53,4 +53,21 @@ test("name servers match ignoring order, case and trailing dots", () => {
   assert.equal(sameNameServers(["NS-2.awsdns-02.com.", "ns-1.awsdns-01.org"], zone), true);
   assert.equal(sameNameServers(["ns-9.other.net", "ns-2.awsdns-02.com"], zone), false);
   assert.equal(sameNameServers([], []), false);
+});
+test("applyErrorMessage shows each Terraform error's summary and detail", () => {
+  const message = applyErrorMessage([
+    {
+      type: "diagnostic",
+      message: "",
+      severity: "error",
+      summary: "creating EC2 Instance",
+      detail: "InsufficientInstanceCapacity: not enough t4g.medium capacity",
+      address: "aws_instance.data",
+    },
+    { type: "diagnostic", message: "", severity: "error", summary: "second error", detail: "" },
+  ]);
+  assert.equal(
+    message,
+    "creating EC2 Instance\nInsufficientInstanceCapacity: not enough t4g.medium capacity\n\nsecond error",
+  );
 });

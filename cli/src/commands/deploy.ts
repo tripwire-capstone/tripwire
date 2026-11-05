@@ -4,11 +4,13 @@ import { bucketExists } from "../bootstrap.js";
 import { checkLogin } from "../checks.js";
 import { readConfig, writeConfig, type TripwireConfig } from "../config.js";
 import { publicNameServers, sameNameServers } from "../dns.js";
-import { waitForLaminar } from "../ecs.js";
+import { startupRows, trackStartup, waitForLaminar, type ServiceProgress } from "../ecs.js";
 import { UserError } from "../errors.js";
 import { syncInfra } from "../infra.js";
 import { bundledInfraDir, deploymentDir } from "../paths.js";
-import { Log } from "../run.js";
+import { applyWithProgress, withHint, type LiveApplyOptions } from "../applyProgress.js";
+import { showProgress, type Block } from "../progressView.js";
+import { CommandError, Log } from "../run.js";
 import { formatDate, latestFinal, listSnapshots } from "../snapshots.js";
 import {
   dataLosses,
@@ -21,6 +23,7 @@ import {
   tfPlanJson,
   tfState,
   writeSettings,
+  type Plan,
 } from "../terraform.js";
 import { stateBucketName, type Restore, type StackName } from "../tfvars.js";
 import { answer, step } from "../ui.js";
@@ -40,28 +43,47 @@ function showModes(): void {
   process.exitCode = 1;
 }
 
-// Plans one stack and applies it if anything changed
+const HINT = "Run `tripwire deploy --lite` again to continue where it stopped.";
+
+interface StepLabels {
+  // Shown while planning and applying, and with its time when done
+  title: string;
+  // Shown when nothing changes; null removes the line
+  unchanged: string | null;
+  // Show the apply's groups live instead of a single spinner
+  live?: Omit<LiveApplyOptions, "title" | "hint">;
+}
+
+// Plans one stack and applies it if anything changed, as a single line (or a live block)
 async function applyStack(
   log: Log,
   stack: StackName,
   yes: boolean,
+  labels: StepLabels,
   planArgs: string[] = [],
 ): Promise<void> {
-  const changed = await step(
-    `${stack}: planning`,
-    async () => {
-      await tfInit(log, stack);
-      return tfPlan(log, stack, planArgs);
-    },
-    (c) => (c ? `${stack}: planned` : `${stack}: no changes`),
-  );
-  if (!changed) {
+  const spin = p.spinner({ indicator: "timer" });
+  spin.start(labels.title);
+  let changed: boolean;
+  let plan: Plan | undefined;
+  try {
+    await tfInit(log, stack);
+    changed = await tfPlan(log, stack, planArgs);
+    if (changed) plan = await tfPlanJson(log, stack);
+  } catch (err) {
+    spin.error(labels.title);
+    throw err;
+  }
+  if (!changed || !plan) {
     await discardPlan(stack);
+    if (labels.unchanged === null) spin.clear();
+    else spin.stop(labels.unchanged);
     return;
   }
 
-  const losses = dataLosses(await tfPlanJson(log, stack));
+  const losses = dataLosses(plan);
   if (losses.length > 0) {
+    spin.clear();
     const what = losses.join(", ");
     if (yes) {
       await discardPlan(stack);
@@ -75,11 +97,46 @@ async function applyStack(
     );
     if (!ok) {
       await discardPlan(stack);
-      throw new UserError(`Stopped before changing ${stack}.`);
+      throw new UserError(`Stopped before changing ${labels.title}.`);
     }
+    spin.start(labels.title);
   }
 
-  await step(`${stack}: applying`, () => tfApply(log, stack), () => `${stack}: done`);
+  if (labels.live) {
+    spin.clear();
+    await applyWithProgress(log, stack, plan, { ...labels.live, title: labels.title, hint: HINT });
+    return;
+  }
+  try {
+    await tfApply(log, stack);
+  } catch (err) {
+    spin.error(labels.title);
+    if (err instanceof CommandError) throw new CommandError(withHint(err.message, HINT), err.stderr);
+    throw err;
+  }
+  spin.stop(labels.title);
+}
+
+// "Starting Laminar", with a live line per service
+async function startLaminar(log: Log, region: string): Promise<void> {
+  const startedAt = Date.now();
+  let tracked: Record<string, ServiceProgress> = {};
+  let status: Block["status"] = "running";
+  const display = showProgress(() => {
+    const now = Date.now();
+    return { title: "Starting Laminar", status, seconds: (now - startedAt) / 1000, rows: startupRows(tracked, startedAt, now) };
+  });
+  try {
+    await waitForLaminar(log, region, (update) => {
+      tracked = trackStartup(tracked, update, Date.now());
+    });
+    status = "done";
+  } catch (err) {
+    status = "failed";
+    throw err;
+  } finally {
+    display.stop();
+  }
 }
 
 // Waits until public DNS sends the domain to the zone
@@ -108,12 +165,21 @@ async function deployPersistent(log: Log, config: TripwireConfig, yes: boolean):
   if (!config.zoneId) {
     await tfInit(log, "persistent");
     if (!findResource(await tfState(log, "persistent"), ZONE)) {
-      await applyStack(log, "persistent", yes, ["-target=aws_route53_zone.main"]);
+      await applyStack(
+        log,
+        "persistent",
+        yes,
+        { title: `Creating a DNS zone for ${config.domain}`, unchanged: null },
+        ["-target=aws_route53_zone.main"],
+      );
     }
     const zone = findResource(await tfState(log, "persistent"), ZONE);
     await waitForDelegation(config.domain, (zone?.values.name_servers as string[]) ?? []);
   }
-  await applyStack(log, "persistent", yes);
+  await applyStack(log, "persistent", yes, {
+    title: "Domain and HTTPS certificate",
+    unchanged: "Domain and HTTPS certificate · unchanged",
+  });
 }
 
 interface DataPlan {
@@ -185,6 +251,7 @@ export async function deploy(options: DeployOptions): Promise<void> {
       `Mode     Lite, ${LITE_PRICE}`,
       `Infra    ${infra}`,
       `Data     ${data.summary}`,
+      `Time     ${data.stackEmpty ? "about 12 minutes" : "usually a few minutes"}`,
     ].join("\n"),
     "Deploy",
   );
@@ -197,14 +264,18 @@ export async function deploy(options: DeployOptions): Promise<void> {
   }
 
   const yes = options.yes ?? false;
-  await applyStack(log, "bootstrap", yes);
+  await applyStack(log, "bootstrap", yes, { title: "Preparing your AWS account", unchanged: null });
   await deployPersistent(log, config, yes);
-  await applyStack(log, "stack", yes);
-  await step(
-    "Waiting for Laminar to start",
-    () => waitForLaminar(log, config.region),
-    () => "Laminar is running",
-  );
+  await applyStack(log, "stack", yes, {
+    title: data.stackEmpty ? "Building Laminar" : "Updating Laminar",
+    unchanged: "Laminar · unchanged",
+    live: {
+      action: "build",
+      ...(data.stackEmpty ? { estimate: "usually 8–10 minutes" } : {}),
+      usualSeconds: 15 * 60,
+    },
+  });
+  await startLaminar(log, config.region);
 
   const outputs = await tfOutputs(log, "stack");
   await writeConfig({
