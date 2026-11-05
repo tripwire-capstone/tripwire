@@ -1,0 +1,70 @@
+# Runs the whole pipeline: docker compose up -d --build
+# Laminar must be running first (its own docker compose); see README.
+
+# Shared settings for the three Python services.
+x-python: &python
+  build: .
+  env_file: .env
+  environment:
+    # Inside Docker, services reach each other by service name, not localhost.
+    # These override the localhost values in .env (which are for running things directly).
+    DATABASE_URL: postgresql://signals:${POSTGRES_PASSWORD}@db:5432/signals_prototype
+    LMNR_BASE_URL: http://app-server     # Laminar's API, reached over Laminar's network
+  depends_on:
+    db:
+      condition: service_healthy
+  networks: [default, laminar]
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: signals_prototype
+      POSTGRES_USER: signals
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the root .env file}
+    ports:
+      - "127.0.0.1:5434:5432"            # 5433 is taken by Laminar's own Postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  sync:
+    <<: *python
+    command: python -m sync.run
+
+  classifier:
+    <<: *python
+    command: python -m classifier.live
+
+  api:
+    <<: *python
+    command: python -m uvicorn backend.app:app --host 0.0.0.0 --port 8100
+    ports:
+      - "127.0.0.1:8100:8100"            # 8000 is taken by Laminar's API
+
+  web:
+    image: node:22-slim
+    working_dir: /app
+    volumes:
+      - ./frontend:/app                  # live reload: edits on your machine show up right away
+      - /app/node_modules                # keep the container's node_modules separate from yours
+    command: sh -c "npm ci && npm run dev -- --host 0.0.0.0"
+    environment:
+      API_URL: http://api:8100
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on: [api]
+
+networks:
+  laminar:
+    external: true
+    name: lmnr_default                   # created by Laminar's docker compose
+
+volumes:
+  postgres_data:

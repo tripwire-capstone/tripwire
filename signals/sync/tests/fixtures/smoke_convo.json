@@ -1,0 +1,50 @@
+[
+  {
+    "trace_id": "25452952-65fa-dee1-0659-1516e32c2387",
+    "span_id": "00000000-0000-0000-eda4-111d7ba41666",
+    "parent_span_id": "00000000-0000-0000-0000-000000000000",
+    "name": "park_chat",
+    "span_type": "DEFAULT",
+    "start_time": "2026-10-26 18:32:46.549806073",
+    "end_time": "2026-10-26 18:32:49.312142973",
+    "status": "success",
+    "input": "\"Hi there! We're planning a special anniversary trip to the Grand Canyon and are super excited! Can you tell us which trails are open right now?\"",
+    "output": "\"At Grand Canyon National Park, the following trails are currently open:\\n\\n1. **Bright Angel Trail**\\n   - Length: 9.0 miles round trip\\n   - Difficulty: Strenuous\\n   - Conditions: Water stations open; avoid hiking down in midday heat.\\n\\n2. **South Kaibab Trail**\\n   - Length: 6.0 miles round trip\\n   - Difficulty: Strenuous\\n   - Conditions: No water on the trail; very exposed.\\n\\nThe **North Kaibab Trail** is closed for the season. Enjoy your anniversary trip!\""
+  },
+  {
+    "trace_id": "25452952-65fa-dee1-0659-1516e32c2387",
+    "span_id": "00000000-0000-0000-663c-3d993031a96f",
+    "parent_span_id": "00000000-0000-0000-eda4-111d7ba41666",
+    "name": "check_trail_status",
+    "span_type": "TOOL",
+    "start_time": "2026-10-26 18:32:47.592346896",
+    "end_time": "2026-10-26 18:32:47.592357395",
+    "status": "success",
+    "input": "{\"park_name\":\"Grand Canyon\"}",
+    "output": "{\"park\":\"Grand Canyon National Park\",\"trails\":{\"Bright Angel\":{\"status\":\"open\",\"length_miles_round_trip\":9.0,\"difficulty\":\"strenuous\",\"conditions\":\"Water stations open; avoid hiking down in midday heat.\"},\"South Kaibab\":{\"status\":\"open\",\"length_miles_round_trip\":6.0,\"difficulty\":\"strenuous\",\"conditions\":\"No water on the trail; very exposed.\"},\"North Kaibab\":{\"status\":\"closed\",\"length_miles_round_trip\":14.0,\"difficulty\":\"very strenuous\",\"conditions\":\"Closed: North Rim road is closed for the season.\"}}}"
+  },
+  {
+    "trace_id": "364f7d71-4ae8-5abf-9f9c-39cb8b95134a",
+    "span_id": "00000000-0000-0000-6685-6f938921dc1a",
+    "parent_span_id": "00000000-0000-0000-0000-000000000000",
+    "name": "park_chat",
+    "span_type": "DEFAULT",
+    "start_time": "2026-10-26 18:32:50.942769640",
+    "end_time": "2026-10-26 18:32:52.060158448",
+    "status": "success",
+    "input": "\"Oh, that’s so helpful, thank you! We were really hoping to explore Bright Angel Trail. Just to confirm, is that trail open all day, or are there certain hours we should be aware of?\"",
+    "output": "\"Bright Angel Trail is open year-round, but it's best to start your hike early in the morning or later in the afternoon to avoid the midday heat, especially during warmer months. Always check for any specific park alerts or updates before your hike. Enjoy your adventure!\""
+  },
+  {
+    "trace_id": "bf482284-34d2-c490-4973-66d011fce2ca",
+    "span_id": "00000000-0000-0000-bfd8-e9ceb3347f51",
+    "parent_span_id": "00000000-0000-0000-0000-000000000000",
+    "name": "park_chat",
+    "span_type": "DEFAULT",
+    "start_time": "2026-10-26 18:32:53.628183409",
+    "end_time": "2026-10-26 18:32:54.688809751",
+    "status": "success",
+    "input": "\"Great, that makes sense! Thank you for all your help. We really appreciate it and can't wait to see the views!\"",
+    "output": "\"You're very welcome! I'm glad I could help. Enjoy the stunning views at the Grand Canyon and have a wonderful anniversary trip! If you have any more questions or need assistance, feel free to ask. Safe travels!\""
+  }
+]
