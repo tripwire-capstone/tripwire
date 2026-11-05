@@ -59,13 +59,13 @@ locals {
     DATABASE_URL           = aws_ssm_parameter.database_url.arn
     CLICKHOUSE_PASSWORD    = aws_ssm_parameter.clickhouse_password.arn
     CLICKHOUSE_RO_PASSWORD = aws_ssm_parameter.clickhouse_password.arn
-    SHARED_SECRET_TOKEN    = aws_ssm_parameter.shared_secret_token.arn
-    AEAD_SECRET_KEY        = aws_ssm_parameter.aead_secret_key.arn
+    SHARED_SECRET_TOKEN    = local.laminar_secrets.shared_secret_token
+    AEAD_SECRET_KEY        = local.laminar_secrets.aead_secret_key
   }
 
   frontend_secrets = merge(local.app_server_secrets, {
-    NEXTAUTH_SECRET    = aws_ssm_parameter.auth_secret.arn
-    BETTER_AUTH_SECRET = aws_ssm_parameter.auth_secret.arn
+    NEXTAUTH_SECRET    = local.laminar_secrets.auth_secret
+    BETTER_AUTH_SECRET = local.laminar_secrets.auth_secret
   })
 }
 

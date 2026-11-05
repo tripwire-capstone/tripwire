@@ -17,3 +17,12 @@ output "zone_id" {
   description = "Route 53 zone holding domain. The stack creates its alias record to the ALB here."
   value       = local.zone_id
 }
+
+output "laminar_secret_arns" {
+  description = "SSM parameters holding Laminar's secrets. The stack's ECS tasks read them."
+  value = {
+    shared_secret_token = aws_ssm_parameter.shared_secret_token.arn
+    aead_secret_key     = aws_ssm_parameter.aead_secret_key.arn
+    auth_secret         = aws_ssm_parameter.auth_secret.arn
+  }
+}

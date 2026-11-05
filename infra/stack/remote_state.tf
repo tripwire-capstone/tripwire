@@ -13,6 +13,7 @@ data "terraform_remote_state" "persistent" {
 
 locals {
   laminar_domain  = data.terraform_remote_state.persistent.outputs.domain
+  laminar_secrets = data.terraform_remote_state.persistent.outputs.laminar_secret_arns
   certificate_arn = data.terraform_remote_state.persistent.outputs.certificate_arn
   zone_id         = data.terraform_remote_state.persistent.outputs.zone_id
 }
