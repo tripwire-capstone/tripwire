@@ -133,3 +133,24 @@ variable "task_sizes" {
     frontend   = { cpu = 512, memory = 1024 }
   }
 }
+
+variable "data_snapshot_daily_retention_count" {
+  description = "How many daily snapshots of the data volume to keep, alongside the ones every data_snapshot_interval_hours. 7 keeps a week."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.data_snapshot_daily_retention_count >= 1 && var.data_snapshot_daily_retention_count <= 1000
+    error_message = "data_snapshot_daily_retention_count must be between 1 and 1000."
+  }
+}
+
+variable "alert_email" {
+  description = "Email that gets an alert when a scheduled snapshot of the data volume fails."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.alert_email))
+    error_message = "alert_email must be an email address."
+  }
+}

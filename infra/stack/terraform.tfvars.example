@@ -12,6 +12,11 @@
 
 # Emails allowed to log in to the Laminar UI; each gets a temporary password by email
 # laminar_users = ["you@example.com"]
+
 # Scheduled snapshots of the data volume: how often, and how many to keep
-# data_snapshot_interval_hours  = 1
-# data_snapshot_retention_count = 24
+# data_snapshot_interval_hours        = 1
+# data_snapshot_retention_count       = 24
+# data_snapshot_daily_retention_count = 7
+
+# Gets an email when a scheduled data volume snapshot fails
+# alert_email = "you@example.com"

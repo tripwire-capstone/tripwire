@@ -47,6 +47,26 @@ resource "aws_dlm_lifecycle_policy" "data" {
         count = var.data_snapshot_retention_count
       }
     }
+
+    # One snapshot a day, kept a week, for problems that are noticed late
+    schedule {
+      name      = "daily"
+      copy_tags = true
+
+      tags_to_add = {
+        Schedule = "daily"
+      }
+
+      create_rule {
+        interval      = 24
+        interval_unit = "HOURS"
+        times         = ["08:00"]
+      }
+
+      retain_rule {
+        count = var.data_snapshot_daily_retention_count
+      }
+    }
   }
 
   tags = {
