@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { checkRollouts, phaseFor, startupRows, trackStartup } from "./ecs.js";
 
-test("done once both services complete", () => {
-  const check = checkRollouts({ frontend: "COMPLETED", "app-server": "COMPLETED" }, []);
+test("done once every service completes", () => {
+  const check = checkRollouts({ frontend: "COMPLETED", "app-server": "COMPLETED", "mock-ui": "COMPLETED" }, []);
   assert.deepEqual(check, { done: true, redeploy: [], failed: [] });
 });
 
@@ -48,12 +48,13 @@ test("phaseFor: a stopping task is being replaced", () => {
 test("startupRows shows each service's phase, then its time once its rollout completes", () => {
   let tracked = trackStartup(
     {},
-    { states: { frontend: "IN_PROGRESS", "app-server": "IN_PROGRESS" }, phases: { frontend: "checking health", "app-server": "downloading" }, retried: [] },
+    { states: { frontend: "IN_PROGRESS", "app-server": "IN_PROGRESS", "mock-ui": "COMPLETED" }, phases: { frontend: "checking health", "app-server": "downloading" }, retried: [] },
     10_000,
   );
   assert.deepEqual(startupRows(tracked, 0, 10_000), [
     { name: "Dashboard", status: "running", seconds: 10, detail: "checking health" },
     { name: "API", status: "running", seconds: 10, detail: "downloading" },
+    { name: "Tripwire UI", status: "done", seconds: 10 },
   ]);
 
   // The next poll's phase lookup failed: keep the last known phases
@@ -61,6 +62,7 @@ test("startupRows shows each service's phase, then its time once its rollout com
   assert.deepEqual(startupRows(tracked, 0, 90_000), [
     { name: "Dashboard", status: "done", seconds: 70 },
     { name: "API", status: "running", seconds: 90, detail: "downloading" },
+    { name: "Tripwire UI", status: "done", seconds: 10 },
   ]);
 });
 

@@ -4,7 +4,7 @@ import { DEPLOYMENT_NAME } from "./paths.js";
 import type { Row } from "./progressView.js";
 import { run, type Log } from "./run.js";
 
-export const SERVICES = ["frontend", "app-server"];
+export const SERVICES = ["frontend", "app-server", "mock-ui"];
 
 export interface RolloutCheck {
   done: boolean;
@@ -33,7 +33,11 @@ async function rolloutStates(log: Log, region: string): Promise<Record<string, s
 }
 
 // What a user sees for each service while Laminar starts
-export const SERVICE_NAMES: Record<string, string> = { frontend: "Dashboard", "app-server": "API" };
+export const SERVICE_NAMES: Record<string, string> = {
+  frontend: "Dashboard",
+  "app-server": "API",
+  "mock-ui": "Tripwire UI",
+};
 
 export type Phase = "downloading" | "starting" | "checking health" | "healthy" | "restarting";
 

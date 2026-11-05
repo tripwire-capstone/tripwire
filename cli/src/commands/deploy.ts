@@ -286,6 +286,7 @@ export async function deploy(options: DeployOptions): Promise<void> {
   p.note(
     [
       `Laminar  ${outputs.laminar_url}`,
+      `Tripwire ${outputs.tripwire_url}`,
       `gRPC     ${outputs.laminar_grpc_endpoint}`,
       `Log      ${log.path}`,
     ].join("\n"),

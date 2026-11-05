@@ -1,0 +1,43 @@
+# Builds the mock UI image whenever its files change, on any branch.
+# Infra pins the digest printed in the run summary.
+name: Mock UI image
+
+on:
+  push:
+    paths:
+      - "signals/mock-ui/**"
+      - ".github/workflows/mock-ui-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ECS runs ARM64; amd64 is for running it locally
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: signals/mock-ui
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/mock-ui:sha-${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Print the value for infra
+        run: |
+          echo "mock_ui_image = \"ghcr.io/${{ github.repository_owner }}/mock-ui@${{ steps.build.outputs.digest }}\"" >> "$GITHUB_STEP_SUMMARY"
