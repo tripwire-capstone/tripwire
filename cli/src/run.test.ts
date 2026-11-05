@@ -1,12 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pluginCacheDir } from "./pluginCache.js";
 import { CommandError, ProgramNotFoundError, Log, run } from "./run.js";
 
 // Logs go to a temp folder, not ~/.tripwire
 process.env.TRIPWIRE_HOME = mkdtempSync(join(tmpdir(), "tripwire-run-test-"));
+// Ignore the developer's own Terraform cache settings in these tests
+delete process.env.TF_PLUGIN_CACHE_DIR;
+process.env.TF_CLI_CONFIG_FILE = join(tmpdir(), "tripwire-no-such-terraformrc");
 
 test("run: a program that isn't installed throws ProgramNotFoundError", async () => {
   const log = new Log("test");
@@ -72,4 +76,22 @@ test("run: lines onLine drops are left out of the log", async () => {
   const logged = readFileSync(log.path, "utf8");
   assert.match(logged, /^keep$/m);
   assert.doesNotMatch(logged, /^drop$/m);
+});
+
+test("run: Terraform gets the shared plugin cache, the AWS CLI doesn't", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "tripwire-fake-tools-"));
+  for (const name of ["terraform", "aws"]) {
+    const script = join(dir, name);
+    writeFileSync(script, '#!/bin/sh\necho "cache=$TF_PLUGIN_CACHE_DIR"\n');
+    chmodSync(script, 0o755);
+  }
+  const realPath = process.env.PATH;
+  process.env.PATH = dir;
+  try {
+    const log = new Log("test");
+    assert.equal(await run(log, "terraform", ["init"]), `cache=${pluginCacheDir()}`);
+    assert.equal(await run(log, "aws", ["sts"]), "cache=");
+  } finally {
+    process.env.PATH = realPath;
+  }
 });
