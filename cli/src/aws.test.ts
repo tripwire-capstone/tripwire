@@ -3,7 +3,16 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { formatAccount, getAccountLabel, isOwnZone, matchingZones } from "./aws.js";
+import {
+  findExistingZone,
+  formatAccount,
+  getAccountLabel,
+  isOwnZone,
+  listUserZones,
+  matchingZones,
+  recordTypesAt,
+  zoneNameServers,
+} from "./aws.js";
 import { isTerraformRecentEnough } from "./checks.js";
 import { Log } from "./run.js";
 
@@ -22,16 +31,21 @@ async function withPath(dir: string, fn: () => Promise<void>): Promise<void> {
   }
 }
 
-// A folder holding a fake `aws`; each answer is a shell snippet for `aws account …` / `aws iam …`
-function fakeAws(answers: { account: string; iam: string }): string {
+// A folder holding a fake `aws`; answers maps "<service> <command>" to a shell snippet
+function fakeAws(answers: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), "tripwire-fake-aws-"));
   const script = join(dir, "aws");
-  writeFileSync(
-    script,
-    `#!/bin/sh\ncase "$1" in\n  account) ${answers.account} ;;\n  iam) ${answers.iam} ;;\nesac\n`,
-  );
+  const cases = Object.entries(answers)
+    .map(([command, snippet]) => `  "${command}") ${snippet} ;;`)
+    .join("\n");
+  writeFileSync(script, `#!/bin/sh\ncase "$1 $2" in\n${cases}\nesac\n`);
   chmodSync(script, 0o755);
   return dir;
+}
+
+// The shell snippet that prints value as JSON
+function prints(value: unknown): string {
+  return `echo '${JSON.stringify(value)}'`;
 }
 
 const DENIED = "echo 'AccessDenied' >&2; exit 254";
@@ -85,8 +99,8 @@ test("formatAccount puts the label in brackets, or leaves it out", () => {
 
 test("getAccountLabel uses the account name when it can read it", async () => {
   const dir = fakeAws({
-    account: `echo '{"AccountName": "Acme"}'`,
-    iam: `echo '{"AccountAliases": ["acme-alias"]}'`,
+    "account get-account-information": prints({ AccountName: "Acme" }),
+    "iam list-account-aliases": prints({ AccountAliases: ["acme-alias"] }),
   });
   await withPath(dir, async () => {
     assert.equal(await getAccountLabel(new Log("test")), "Acme");
@@ -94,17 +108,79 @@ test("getAccountLabel uses the account name when it can read it", async () => {
 });
 
 test("getAccountLabel falls back to the alias when the name is denied", async () => {
-  const dir = fakeAws({ account: DENIED, iam: `echo '{"AccountAliases": ["acme-alias"]}'` });
+  const dir = fakeAws({
+    "account get-account-information": DENIED,
+    "iam list-account-aliases": prints({ AccountAliases: ["acme-alias"] }),
+  });
   await withPath(dir, async () => {
     assert.equal(await getAccountLabel(new Log("test")), "acme-alias");
   });
 });
 
 test("getAccountLabel gives null when both are denied or there's no alias", async () => {
-  await withPath(fakeAws({ account: DENIED, iam: DENIED }), async () => {
+  await withPath(fakeAws({ "account get-account-information": DENIED, "iam list-account-aliases": DENIED }), async () => {
     assert.equal(await getAccountLabel(new Log("test")), null);
   });
-  await withPath(fakeAws({ account: DENIED, iam: `echo '{"AccountAliases": []}'` }), async () => {
+  await withPath(fakeAws({
+    "account get-account-information": DENIED,
+    "iam list-account-aliases": prints({ AccountAliases: [] }),
+  }), async () => {
     assert.equal(await getAccountLabel(new Log("test")), null);
+  });
+});
+
+const OWN_TAGS = [
+  { Key: "Project", Value: "tripwire" },
+  { Key: "Stack", Value: "persistent" },
+];
+
+// A fake Route 53 with a user zone, a private zone and a zone Tripwire created
+const route53 = {
+  "route53 list-hosted-zones": prints({
+    HostedZones: [
+      { Id: "/hostedzone/ZUSER", Name: "example.com.", Config: { PrivateZone: false } },
+      { Id: "/hostedzone/ZPRIV", Name: "tripwire.internal.", Config: { PrivateZone: true } },
+      { Id: "/hostedzone/ZOWN", Name: "laminar.other.org.", Config: { PrivateZone: false } },
+    ],
+  }),
+  "route53 list-tags-for-resources": prints({
+    ResourceTagSets: [
+      { ResourceId: "ZUSER", Tags: [{ Key: "Project", Value: "tripwire" }] },
+      { ResourceId: "ZOWN", Tags: OWN_TAGS },
+    ],
+  }),
+};
+
+test("listUserZones lists public zones, leaving out the ones Tripwire created", async () => {
+  await withPath(fakeAws(route53), async () => {
+    assert.deepEqual(await listUserZones(new Log("test")), [{ id: "ZUSER", name: "example.com" }]);
+  });
+});
+
+test("findExistingZone finds the parent zone, but not a zone Tripwire created", async () => {
+  await withPath(fakeAws(route53), async () => {
+    assert.deepEqual(await findExistingZone(new Log("test"), "laminar.example.com"), {
+      id: "ZUSER",
+      name: "example.com",
+    });
+    assert.equal(await findExistingZone(new Log("test"), "laminar.other.org"), null);
+    assert.equal(await findExistingZone(new Log("test"), "laminar.io"), null);
+  });
+});
+
+test("zoneNameServers reads the zone's delegation set", async () => {
+  const servers = ["ns-1.awsdns-01.org", "ns-2.awsdns-02.com"];
+  const dir = fakeAws({ "route53 get-hosted-zone": prints({ DelegationSet: { NameServers: servers } }) });
+  await withPath(dir, async () => {
+    assert.deepEqual(await zoneNameServers(new Log("test"), "ZUSER"), servers);
+  });
+});
+
+test("recordTypesAt reports only records that would clash with Laminar's", async () => {
+  await withPath(fakeAws({ "route53 list-resource-record-sets": prints(["CNAME", "TXT"]) }), async () => {
+    assert.deepEqual(await recordTypesAt(new Log("test"), "ZUSER", "laminar.example.com"), ["CNAME"]);
+  });
+  await withPath(fakeAws({ "route53 list-resource-record-sets": prints(["NS", "SOA"]) }), async () => {
+    assert.deepEqual(await recordTypesAt(new Log("test"), "ZUSER", "example.com"), []);
   });
 });

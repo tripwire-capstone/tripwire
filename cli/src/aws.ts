@@ -74,25 +74,66 @@ export function isOwnZone(tags: Tag[]): boolean {
   return has("Project", DEPLOYMENT_NAME) && has("Stack", "persistent");
 }
 
-// Closest public zone for the domain; null if none or ours
-export async function findExistingZone(log: Log, domain: string): Promise<Zone | null> {
+// Public hosted zones in the account (private ones aren't reachable from the internet)
+export async function listPublicZones(log: Log): Promise<Zone[]> {
   const out = await run(log, "aws", ["route53", "list-hosted-zones", "--output", "json"]);
   const { HostedZones } = JSON.parse(out) as {
     HostedZones: { Id: string; Name: string; Config: { PrivateZone: boolean } }[];
   };
 
-  const zones = HostedZones.filter((z) => !z.Config.PrivateZone).map((z) => ({
+  return HostedZones.filter((z) => !z.Config.PrivateZone).map((z) => ({
     id: z.Id.replace("/hostedzone/", ""),
     name: z.Name.replace(/\.$/, ""),
   }));
+}
 
-  const closest = matchingZones(zones, domain)[0];
+// IDs of the zones the persistent stack created (tags are read 10 zones per call, the API's limit)
+export async function ownZoneIds(log: Log, zoneIds: string[]): Promise<Set<string>> {
+  const own = new Set<string>();
+  for (let start = 0; start < zoneIds.length; start += 10) {
+    const out = await run(log, "aws", [
+      "route53", "list-tags-for-resources", "--resource-type", "hostedzone",
+      "--resource-ids", ...zoneIds.slice(start, start + 10), "--output", "json",
+    ]);
+    const { ResourceTagSets } = JSON.parse(out) as {
+      ResourceTagSets: { ResourceId: string; Tags: Tag[] }[];
+    };
+    for (const set of ResourceTagSets) {
+      if (isOwnZone(set.Tags)) own.add(set.ResourceId);
+    }
+  }
+  return own;
+}
+
+// Public zones a user can deploy into: everything except the zones Tripwire created
+export async function listUserZones(log: Log): Promise<Zone[]> {
+  const zones = await listPublicZones(log);
+  const own = await ownZoneIds(log, zones.map((z) => z.id));
+  return zones.filter((z) => !own.has(z.id)).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// Closest public zone for the domain; null if none or ours
+export async function findExistingZone(log: Log, domain: string): Promise<Zone | null> {
+  const closest = matchingZones(await listPublicZones(log), domain)[0];
   if (!closest) return null;
+  const own = await ownZoneIds(log, [closest.id]);
+  return own.has(closest.id) ? null : closest;
+}
 
-  const tagsOut = await run(log, "aws", [
-    "route53", "list-tags-for-resource", "--resource-type", "hostedzone",
-    "--resource-id", closest.id, "--output", "json",
+// The name servers Route 53 gave the zone
+export async function zoneNameServers(log: Log, zoneId: string): Promise<string[]> {
+  const out = await run(log, "aws", ["route53", "get-hosted-zone", "--id", zoneId, "--output", "json"]);
+  const { DelegationSet } = JSON.parse(out) as { DelegationSet?: { NameServers?: string[] } };
+  return DelegationSet?.NameServers ?? [];
+}
+
+// Record types that would clash with Laminar's A record at exactly this name
+const CLASHING_TYPES = ["A", "AAAA", "CNAME"];
+
+export async function recordTypesAt(log: Log, zoneId: string, hostname: string): Promise<string[]> {
+  const out = await run(log, "aws", [
+    "route53", "list-resource-record-sets", "--hosted-zone-id", zoneId,
+    "--query", `ResourceRecordSets[?Name=='${hostname}.'].Type`, "--output", "json",
   ]);
-  const { ResourceTagSet } = JSON.parse(tagsOut) as { ResourceTagSet: { Tags: Tag[] } };
-  return isOwnZone(ResourceTagSet.Tags) ? null : closest;
+  return (JSON.parse(out) as string[]).filter((type) => CLASHING_TYPES.includes(type));
 }

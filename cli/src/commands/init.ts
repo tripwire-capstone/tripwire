@@ -6,18 +6,23 @@ import {
   getAccountLabel,
   getFreePlan,
   listRegions,
+  listUserZones,
+  recordTypesAt,
+  zoneNameServers,
+  type Zone,
 } from "../aws.js";
 import { adoptStateBucket } from "../bootstrap.js";
 import { checkTerraform, describeIdentity, getCallerIdentity } from "../checks.js";
 import { configPath, readConfig, writeConfig, type TripwireConfig } from "../config.js";
+import { publicNameServers, sameNameServers } from "../dns.js";
 import { UserError } from "../errors.js";
+import { hostnameProblem, isInZone, normalizeHostname, suggestHostname } from "../hostname.js";
 import { syncInfra } from "../infra.js";
 import { bundledInfraDir, deploymentDir } from "../paths.js";
 import { Log } from "../run.js";
 import { answer, step } from "../ui.js";
 
 const REGIONS = ["us-east-1", "us-east-2", "us-west-2", "eu-west-1", "eu-central-1"];
-const DOMAIN = /^([a-z0-9-]+\.)+[a-z]{2,}$/;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 async function askRegion(log: Log, current?: string): Promise<string> {
@@ -44,16 +49,148 @@ async function askRegion(log: Log, current?: string): Promise<string> {
   );
 }
 
-async function askZone(log: Log, domain: string): Promise<string | null> {
-  const zone = await step("Looking for your domain in Route 53", () =>
-    findExistingZone(log, domain),
-  );
-  if (!zone) return null;
+type DnsProvider = "route53" | "cloudflare" | "other";
 
-  const use = answer(
-    await p.confirm({ message: `Use your Route 53 zone ${zone.name}? No NS records needed.` }),
+const PROVIDER_NAMES: Record<DnsProvider, string> = {
+  route53: "Route 53 (this AWS account)",
+  cloudflare: "Cloudflare",
+  other: "Another DNS provider",
+};
+
+interface DomainChoice {
+  domain: string;
+  zoneId: string | null;
+}
+
+// Stops unless public DNS already uses this Route 53 zone; otherwise the certificate never validates
+async function checkZoneIsLive(log: Log, zone: Zone): Promise<void> {
+  const [expected, actual] = await step(
+    `Checking that ${zone.name} uses this Route 53 zone`,
+    async () => [await zoneNameServers(log, zone.id), await publicNameServers(zone.name)],
+    () => `${zone.name} uses this Route 53 zone`,
   );
-  return use ? zone.id : null;
+  if (sameNameServers(actual, expected)) return;
+
+  throw new UserError(
+    `${zone.name} doesn't point at its Route 53 zone yet.\n` +
+      `  Public DNS shows: ${actual.length > 0 ? actual.join(", ") : "nothing"}\n` +
+      `  It should be:     ${expected.join(", ")}\n` +
+      "Set these name servers at your domain's registrar, wait for DNS to update, then run init again.",
+  );
+}
+
+// The Route 53 zone to use: the only one, or the user's pick; null if the account has none
+async function askRoute53Zone(log: Log, savedZoneId: string | null): Promise<Zone | null> {
+  const zones = await step("Looking for your domains in Route 53", () => listUserZones(log));
+  if (zones.length === 0) return null;
+  if (zones.length === 1) {
+    p.log.info(`Using your Route 53 domain ${zones[0].name}`);
+    return zones[0];
+  }
+  return answer(
+    await p.select({
+      message: "Which domain should Laminar use?",
+      initialValue: zones.find((z) => z.id === savedZoneId),
+      options: zones.map((z) => ({ value: z, label: z.name })),
+    }),
+  );
+}
+
+// An address in the zone that nothing else uses (or that the user says is fine)
+async function askHostnameInZone(log: Log, zone: Zone, saved?: string): Promise<string> {
+  let initialValue = saved && isInZone(saved, zone.name) ? saved : suggestHostname(zone.name);
+  for (;;) {
+    const hostname = normalizeHostname(
+      answer(
+        await p.text({
+          message: "Address for Laminar",
+          initialValue,
+          validate: (v) => hostnameProblem(v, zone.name),
+        }),
+      ),
+    );
+
+    const taken = await step(
+      `Checking that ${hostname} is free`,
+      () => recordTypesAt(log, zone.id, hostname),
+      (types) => (types.length === 0 ? `${hostname} is free` : `${hostname} is in use`),
+    );
+    if (taken.length === 0) return hostname;
+
+    const useAnyway = answer(
+      await p.confirm({
+        message: `${hostname} already has DNS records (${taken.join(", ")}). Use it anyway?`,
+        initialValue: false,
+      }),
+    );
+    if (useAnyway) return hostname;
+    initialValue = hostname;
+  }
+}
+
+async function askRoute53Domain(log: Log, saved: TripwireConfig | null): Promise<DomainChoice | null> {
+  const zone = await askRoute53Zone(log, saved?.zoneId ?? null);
+  if (!zone) {
+    p.log.warn("This AWS account has no public Route 53 domains. Pick where your DNS is hosted instead.");
+    return null;
+  }
+  await checkZoneIsLive(log, zone);
+  return { domain: await askHostnameInZone(log, zone, saved?.domain), zoneId: zone.id };
+}
+
+async function askOtherDomain(
+  log: Log,
+  provider: DnsProvider,
+  saved: TripwireConfig | null,
+): Promise<DomainChoice> {
+  const domain = normalizeHostname(
+    answer(
+      await p.text({
+        message: "Address for Laminar",
+        placeholder: "laminar.example.com",
+        initialValue: saved?.domain,
+        validate: (v) => hostnameProblem(v),
+      }),
+    ),
+  );
+
+  // The domain may be in Route 53 after all
+  const zone = await step("Looking for your domain in Route 53", () => findExistingZone(log, domain));
+  if (zone) {
+    const use = answer(
+      await p.confirm({ message: `Use your Route 53 zone ${zone.name}? No NS records needed.` }),
+    );
+    if (use) {
+      await checkZoneIsLive(log, zone);
+      return { domain, zoneId: zone.id };
+    }
+  }
+
+  p.log.info(
+    `Tripwire will create a DNS zone for ${domain}. During deploy you'll add 4 NS records ` +
+      `for it at ${PROVIDER_NAMES[provider]}; deploy shows them and waits until they work.`,
+  );
+  return { domain, zoneId: null };
+}
+
+// Where the DNS is hosted decides how the domain is chosen
+async function askDomain(log: Log, saved: TripwireConfig | null): Promise<DomainChoice> {
+  for (;;) {
+    const provider = answer(
+      await p.select<DnsProvider>({
+        message: "Where is your domain's DNS hosted?",
+        initialValue: saved?.zoneId ? "route53" : undefined,
+        options: (Object.keys(PROVIDER_NAMES) as DnsProvider[]).map((value) => ({
+          value,
+          label: PROVIDER_NAMES[value],
+        })),
+      }),
+    );
+    if (provider !== "route53") return askOtherDomain(log, provider, saved);
+
+    const choice = await askRoute53Domain(log, saved);
+    if (choice) return choice;
+  }
 }
 
 export async function init(): Promise<void> {
@@ -99,15 +236,7 @@ export async function init(): Promise<void> {
     p.log.info(`Region ${region} and domain ${domain} are fixed after the first deploy.`);
   } else {
     region = await askRegion(log, saved?.region);
-    domain = answer(
-      await p.text({
-        message: "Domain for Laminar",
-        placeholder: "laminar.example.com",
-        initialValue: saved?.domain,
-        validate: (v) => (v && DOMAIN.test(v) ? undefined : "Use a host name like laminar.example.com"),
-      }),
-    );
-    zoneId = await askZone(log, domain);
+    ({ domain, zoneId } = await askDomain(log, saved));
   }
 
   const alertEmail = answer(
