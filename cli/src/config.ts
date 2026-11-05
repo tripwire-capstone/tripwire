@@ -17,6 +17,9 @@ export interface TripwireConfig {
     cliVersion: string;
     at: string;
   };
+  lastDestroy?: {
+    at: string;
+  };
 }
 
 export function configPath(): string {

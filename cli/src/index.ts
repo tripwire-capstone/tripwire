@@ -2,6 +2,7 @@
 import * as p from "@clack/prompts";
 import { Command } from "commander";
 import { deploy } from "./commands/deploy.js";
+import { destroy } from "./commands/destroy.js";
 import { init } from "./commands/init.js";
 import { UserError } from "./errors.js";
 import { CommandError } from "./run.js";
@@ -30,10 +31,8 @@ program
 program
   .command("destroy")
   .description("Remove the stack, keeping one set of final snapshots")
-  .option("-y, --yes", "skip typing the name to confirm")
-  .action((options) => {
-    console.log("destroy: not built yet", options);
-  });
+  .option("-y, --yes", "skip typing delete to confirm")
+  .action(destroy);
 
 try {
   await program.parseAsync();

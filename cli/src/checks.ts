@@ -1,3 +1,4 @@
+import type { TripwireConfig } from "./config.js";
 import { UserError } from "./errors.js";
 import { CommandError, run, type Log } from "./run.js";
 
@@ -35,4 +36,16 @@ export async function getAccountId(log: Log): Promise<string> {
     throw err;
   }
   return (JSON.parse(out) as { Account: string }).Account;
+}
+
+// Tools are ready and the login is the deployment's account
+export async function checkLogin(log: Log, config: TripwireConfig): Promise<void> {
+  await checkTerraform(log);
+  const accountId = await getAccountId(log);
+  if (accountId !== config.accountId) {
+    throw new UserError(
+      `This deployment is in AWS account ${config.accountId}, ` +
+        `but you're logged into ${accountId}.`,
+    );
+  }
 }

@@ -1,12 +1,14 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import * as p from "@clack/prompts";
-import { checkTerraform, getAccountId } from "../checks.js";
+import { bucketExists } from "../bootstrap.js";
+import { checkLogin } from "../checks.js";
 import { readConfig, writeConfig, type TripwireConfig } from "../config.js";
 import { publicNameServers, sameNameServers } from "../dns.js";
 import { UserError } from "../errors.js";
 import { syncInfra } from "../infra.js";
 import { bundledInfraDir, deploymentDir } from "../paths.js";
 import { Log } from "../run.js";
+import { formatDate, latestFinal, listSnapshots } from "../snapshots.js";
 import {
   dataLosses,
   discardPlan,
@@ -19,7 +21,7 @@ import {
   tfState,
   writeSettings,
 } from "../terraform.js";
-import type { StackName } from "../tfvars.js";
+import { stateBucketName, type Restore, type StackName } from "../tfvars.js";
 import { answer, step } from "../ui.js";
 import { CLI_VERSION } from "../version.js";
 
@@ -113,6 +115,40 @@ async function deployPersistent(log: Log, config: TripwireConfig, yes: boolean):
   await applyStack(log, "persistent", yes);
 }
 
+interface DataPlan {
+  stackEmpty: boolean;
+  restore?: Restore;
+  summary: string;
+}
+
+// Whether the stack is empty, and what data it starts with
+async function planData(log: Log, config: TripwireConfig, fresh: boolean): Promise<DataPlan> {
+  const bucket = stateBucketName(config.accountId, config.region);
+  if (!(await bucketExists(log, bucket))) return { stackEmpty: true, summary: "new, empty" };
+
+  await tfInit(log, "stack");
+  if (findResource(await tfState(log, "stack"), "aws_db_instance.main")) {
+    return { stackEmpty: false, summary: "kept, the stack is running" };
+  }
+
+  const latest = latestFinal(await listSnapshots(log, config.region));
+  if (!latest.db && !latest.volume) return { stackEmpty: true, summary: "new, empty" };
+  if (fresh) return { stackEmpty: true, summary: "empty, saved snapshots are kept" };
+  if (!latest.db || !latest.volume) {
+    const found = latest.db ? "database" : "data volume";
+    throw new UserError(
+      `Found a ${found} snapshot but not its pair, so it can't restore. ` +
+        "Use --fresh to start empty.",
+    );
+  }
+
+  return {
+    stackEmpty: true,
+    restore: { dbSnapshotId: latest.db.id, dataVolumeSnapshotId: latest.volume.id },
+    summary: `restoring from the snapshots taken ${formatDate(latest.volume.created)}`,
+  };
+}
+
 export async function deploy(options: DeployOptions): Promise<void> {
   if (!options.lite) return showModes();
 
@@ -121,23 +157,18 @@ export async function deploy(options: DeployOptions): Promise<void> {
   if (!config) throw new UserError("Run `tripwire init` first.");
 
   const log = new Log("deploy");
-  const accountId = await step(
+  await step(
     "Checking Terraform and your AWS login",
-    async () => {
-      await checkTerraform(log);
-      return getAccountId(log);
-    },
-    (account) => `AWS account ${account}`,
+    () => checkLogin(log, config),
+    () => `AWS account ${config.accountId}`,
   );
-  if (accountId !== config.accountId) {
-    throw new UserError(
-      `This deployment is in AWS account ${config.accountId}, ` +
-        `but you're logged into ${accountId}.`,
-    );
-  }
 
   await syncInfra(bundledInfraDir(), deploymentDir());
   await writeSettings(config);
+  const data = await step("Checking for saved data", () =>
+    planData(log, config, options.fresh ?? false),
+  );
+  if (data.restore) await writeSettings(config, data.restore);
 
   const last = config.lastDeploy;
   const infra = !last
@@ -152,6 +183,7 @@ export async function deploy(options: DeployOptions): Promise<void> {
       `Domain   ${config.domain}`,
       `Mode     Lite, ${LITE_PRICE}`,
       `Infra    ${infra}`,
+      `Data     ${data.summary}`,
     ].join("\n"),
     "Deploy",
   );
@@ -185,9 +217,9 @@ export async function deploy(options: DeployOptions): Promise<void> {
 
   const emails = config.laminarUsers.join(", ");
   p.outro(
-    last
-      ? "Done."
-      : `Check your email: ${emails} you should have received ` +
-          "temporary login credentials from AWS.",
+    data.stackEmpty
+      ? `Check your email: ${emails} you should have received ` +
+          "temporary login credentials from AWS."
+      : "Done.",
   );
 }
