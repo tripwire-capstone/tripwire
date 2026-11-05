@@ -299,7 +299,7 @@ resource "aws_ecs_service" "frontend" {
   enable_execute_command = true
 
   # The first start runs ClickHouse migrations; earlier health checks would kill it mid-way
-  health_check_grace_period_seconds = 600
+  health_check_grace_period_seconds = 180
 
   deployment_minimum_healthy_percent = 100
   deployment_maximum_percent         = 200

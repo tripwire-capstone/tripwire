@@ -146,7 +146,7 @@ variable "data_snapshot_daily_retention_count" {
 }
 
 variable "alert_email" {
-  description = "Email that gets an alert when a scheduled snapshot of the data volume fails."
+  description = "Email that gets alerts from this stack: failed or missing data volume snapshots, Laminar down, load balancer errors, data box failures and AWS confirmation links."
   type        = string
 
   validation {

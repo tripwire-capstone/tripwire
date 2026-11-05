@@ -165,6 +165,42 @@ resource "aws_lb_listener_rule" "frontend" {
   }
 }
 
+# gRPC on 8443, the port Laminar's SDKs use by default, so users only set the URL and key.
+resource "aws_lb_listener" "grpc" {
+  load_balancer_arn = aws_lb.main.arn
+  port              = 8443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-PQ-2025-09"
+  certificate_arn   = local.certificate_arn
+
+  # Unknown host names get nothing, as on 443
+  default_action {
+    type = "fixed-response"
+
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "Not found"
+      status_code  = "404"
+    }
+  }
+}
+
+resource "aws_lb_listener_rule" "grpc_8443" {
+  listener_arn = aws_lb_listener.grpc.arn
+  priority     = 10
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.grpc.arn
+  }
+
+  condition {
+    host_header {
+      values = [local.laminar_domain]
+    }
+  }
+}
+
 resource "aws_route53_record" "laminar" {
   zone_id = local.zone_id
   name    = local.laminar_domain

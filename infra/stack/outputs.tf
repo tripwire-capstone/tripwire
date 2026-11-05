@@ -47,3 +47,8 @@ output "laminar_logs_command" {
   description = "Follow both Laminar containers' logs."
   value       = "aws logs tail ${aws_cloudwatch_log_group.laminar.name} --follow"
 }
+
+output "laminar_grpc_endpoint" {
+  description = "Where SDKs send traces over gRPC. Port 8443 is their default, so setting the base URL is enough."
+  value       = "https://${local.laminar_domain}:8443"
+}

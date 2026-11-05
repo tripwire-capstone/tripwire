@@ -77,6 +77,15 @@ resource "aws_vpc_security_group_ingress_rule" "alb_http" {
   to_port           = 80
 }
 
+resource "aws_vpc_security_group_ingress_rule" "alb_grpc" {
+  security_group_id = aws_security_group.alb.id
+  description       = "gRPC from anywhere, on the SDK default port"
+  cidr_ipv4         = "0.0.0.0/0"
+  ip_protocol       = "tcp"
+  from_port         = 8443
+  to_port           = 8443
+}
+
 resource "aws_vpc_security_group_ingress_rule" "app_from_alb" {
   for_each = local.app_ports
 
