@@ -1,8 +1,14 @@
 import { join } from "node:path";
 import * as p from "@clack/prompts";
-import { findExistingZone, getFreePlan, listRegions } from "../aws.js";
+import {
+  findExistingZone,
+  formatAccount,
+  getAccountLabel,
+  getFreePlan,
+  listRegions,
+} from "../aws.js";
 import { adoptStateBucket } from "../bootstrap.js";
-import { checkTerraform, getAccountId } from "../checks.js";
+import { checkTerraform, describeIdentity, getCallerIdentity } from "../checks.js";
 import { configPath, readConfig, writeConfig, type TripwireConfig } from "../config.js";
 import { UserError } from "../errors.js";
 import { syncInfra } from "../infra.js";
@@ -55,10 +61,14 @@ export async function init(): Promise<void> {
   const log = new Log("init");
   const saved = await readConfig();
 
-  const [tfVersion, accountId] = await step(
+  const { accountId, arn, label } = await step(
     "Checking Terraform and your AWS login",
-    async () => [await checkTerraform(log), await getAccountId(log)],
-    ([version, account]) => `Terraform ${version}, AWS account ${account}`,
+    async () => {
+      const version = await checkTerraform(log);
+      const identity = await getCallerIdentity(log);
+      return { version, ...identity, label: await getAccountLabel(log) };
+    },
+    ({ version }) => `Terraform ${version}`,
   );
 
   if (saved && saved.accountId !== accountId) {
@@ -68,9 +78,13 @@ export async function init(): Promise<void> {
     );
   }
 
-  const proceed = answer(
-    await p.confirm({ message: `Set up Tripwire in AWS account ${accountId}?` }),
-  );
+  const identity = describeIdentity(arn);
+  p.log.info(formatAccount(accountId, label, identity.text));
+  if (identity.isRoot) {
+    p.log.warn("You're logged in as the root user. AWS recommends an IAM or SSO login.");
+  }
+
+  const proceed = answer(await p.confirm({ message: "Set up Tripwire in this account?" }));
   if (!proceed) {
     p.cancel("Nothing changed.");
     return;

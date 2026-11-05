@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkTerraform, getAccountId } from "./checks.js";
+import { checkTerraform, describeIdentity, getAccountId } from "./checks.js";
 import { UserError } from "./errors.js";
 import { Log } from "./run.js";
 
@@ -63,4 +63,40 @@ test("checkTerraform says Terraform isn't installed when it's missing", async ()
       return true;
     });
   });
+});
+
+test("describeIdentity names an IAM user, even one with a path", () => {
+  assert.deepEqual(describeIdentity("arn:aws:iam::123456789012:user/admin"), {
+    text: "user admin",
+    isRoot: false,
+  });
+  assert.equal(describeIdentity("arn:aws:iam::123456789012:user/team/ops/nestor").text, "user nestor");
+});
+
+test("describeIdentity names the role of an SSO or assumed-role login", () => {
+  const arn = "arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_AdministratorAccess_ab12/nestor";
+  assert.deepEqual(describeIdentity(arn), {
+    text: "role AWSReservedSSO_AdministratorAccess_ab12",
+    isRoot: false,
+  });
+});
+
+test("describeIdentity flags the root user", () => {
+  assert.deepEqual(describeIdentity("arn:aws:iam::123456789012:root"), {
+    text: "the root user",
+    isRoot: true,
+  });
+});
+
+test("describeIdentity names a federated user", () => {
+  assert.equal(
+    describeIdentity("arn:aws:sts::123456789012:federated-user/nestor").text,
+    "federated user nestor",
+  );
+});
+
+test("describeIdentity falls back to the ARN for shapes it doesn't know", () => {
+  const unknown = "arn:aws:sts::123456789012:something-new/x";
+  assert.deepEqual(describeIdentity(unknown), { text: unknown, isRoot: false });
+  assert.deepEqual(describeIdentity("not an arn"), { text: "not an arn", isRoot: false });
 });

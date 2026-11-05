@@ -25,6 +25,33 @@ export async function getFreePlan(log: Log): Promise<boolean | null> {
   }
 }
 
+// A name people recognise the account by: its name, else its alias; null if neither
+export async function getAccountLabel(log: Log): Promise<string | null> {
+  try {
+    const out = await run(log, "aws", ["account", "get-account-information", "--output", "json"]);
+    const { AccountName } = JSON.parse(out) as { AccountName?: string };
+    if (AccountName) return AccountName;
+  } catch (err) {
+    // Often not allowed for limited logins; try the alias instead
+    if (!(err instanceof CommandError)) throw err;
+  }
+
+  try {
+    const out = await run(log, "aws", ["iam", "list-account-aliases", "--output", "json"]);
+    const { AccountAliases } = JSON.parse(out) as { AccountAliases?: string[] };
+    return AccountAliases?.[0] ?? null;
+  } catch (err) {
+    if (err instanceof CommandError) return null;
+    throw err;
+  }
+}
+
+// e.g. "AWS account 123456789012 (Acme), as user admin"
+export function formatAccount(accountId: string, label: string | null, identity: string): string {
+  const named = label ? ` (${label})` : "";
+  return `AWS account ${accountId}${named}, as ${identity}`;
+}
+
 export async function listRegions(log: Log): Promise<string[]> {
   const out = await run(log, "aws", [
     "ec2", "describe-regions", "--region", "us-east-1",
