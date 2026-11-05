@@ -1,6 +1,6 @@
 import type { TripwireConfig } from "./config.js";
 import { UserError } from "./errors.js";
-import { CommandError, run, type Log } from "./run.js";
+import { CommandError, ProgramNotFoundError, run, type Log } from "./run.js";
 
 export function isTerraformRecentEnough(version: string): boolean {
   const [major, minor] = version.split(".").map(Number);
@@ -12,9 +12,10 @@ export async function checkTerraform(log: Log): Promise<string> {
   try {
     out = await run(log, "terraform", ["version", "-json"]);
   } catch (err) {
-    if (err instanceof CommandError) {
-      throw new UserError("Terraform not found. Install 1.10 or newer.");
+    if (err instanceof ProgramNotFoundError) {
+      throw new UserError("Terraform isn't installed (or isn't on your PATH). Install 1.10 or newer.");
     }
+    // It ran and failed: the error already shows Terraform's output and the log
     throw err;
   }
 
@@ -30,8 +31,16 @@ export async function getAccountId(log: Log): Promise<string> {
   try {
     out = await run(log, "aws", ["sts", "get-caller-identity", "--output", "json"]);
   } catch (err) {
+    if (err instanceof ProgramNotFoundError) {
+      throw new UserError("AWS CLI isn't installed (or isn't on your PATH). Install 2.32 or newer.");
+    }
     if (err instanceof CommandError) {
-      throw new UserError(`AWS CLI missing or not logged in. Run \`aws login\` first.\nLog: ${log.path}`);
+      throw new UserError(
+        `Couldn't use your AWS login:\n${err.stderr || "(no message from the AWS CLI)"}\n\n` +
+          "Log in with `aws login` (add `--profile <name>` if you use a profile, " +
+          "and set AWS_PROFILE to it), then run this again.\n" +
+          `Log: ${log.path}`,
+      );
     }
     throw err;
   }

@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { execa } from "execa";
 import { deploymentDir } from "./paths.js";
@@ -23,8 +23,19 @@ export class Log {
   }
 }
 
-// A program that ran and failed
-export class CommandError extends Error {}
+// A program that failed: it ran and exited with an error, or couldn't start
+export class CommandError extends Error {
+  // What the program printed on stderr, trimmed; empty if it never started
+  readonly stderr: string;
+
+  constructor(message: string, stderr = "") {
+    super(message);
+    this.stderr = stderr;
+  }
+}
+
+// A program that couldn't start because it isn't installed or isn't on the PATH
+export class ProgramNotFoundError extends CommandError {}
 
 interface RunOptions {
   cwd?: string;
@@ -53,10 +64,16 @@ export async function runWithExitCode(
     stderr: ["pipe", toLog],
   });
 
+  // A missing cwd also gives ENOENT; that's a bug here, not a missing program
+  if (result.code === "ENOENT" && (!cwd || existsSync(cwd))) {
+    throw new ProgramNotFoundError(`${file} isn't installed or isn't on your PATH.`);
+  }
+
   const exitCode = result.exitCode ?? -1;
   if (result.failed && !okExitCodes.includes(exitCode)) {
     throw new CommandError(
       `${result.shortMessage ?? `${file} failed`}\n\n${log.tail(20)}\n\nFull log: ${log.path}`,
+      String(result.stderr ?? "").trim(),
     );
   }
   return { stdout: result.stdout, exitCode };
