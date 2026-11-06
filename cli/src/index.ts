@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { deploy } from "./commands/deploy.js";
 import { destroy } from "./commands/destroy.js";
 import { init } from "./commands/init.js";
+import { addUser, listUsers, removeUser } from "./commands/users.js";
 import { UserError } from "./errors.js";
 import { CommandError } from "./run.js";
 import { CLI_VERSION } from "./version.js";
@@ -33,6 +34,26 @@ program
   .description("Remove the stack, keeping one set of final snapshots")
   .option("-y, --yes", "skip typing delete to confirm")
   .action(destroy);
+
+const users = program
+  .command("users")
+  .description("List, add or remove who can sign in");
+
+users
+  .command("list")
+  .description("Show who can sign in")
+  .action(listUsers);
+
+users
+  .command("add <email>")
+  .description("Let someone sign in; AWS emails them a temporary password")
+  .action(addUser);
+
+users
+  .command("remove <email>")
+  .description("Stop someone from signing in")
+  .option("-y, --yes", "skip the confirmation question")
+  .action(removeUser);
 
 try {
   await program.parseAsync();

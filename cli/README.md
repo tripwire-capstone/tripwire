@@ -23,6 +23,7 @@ npm --prefix cli test
 npm --prefix cli run dev -- init            # region, domain, emails
 npm --prefix cli run dev -- deploy --lite   # build or restore
 npm --prefix cli run dev -- destroy         # tear down, keep snapshots
+npm --prefix cli run dev -- users add <email>   # also: list, remove
 ```
 
 - **deploy:** if it creates a new DNS zone, it prints name servers.
@@ -44,4 +45,4 @@ npm --prefix cli run dev -- destroy         # tear down, keep snapshots
 
 - Logs: `~/.tripwire/tripwire/logs/`. Send the log with any bug report.
 - `ExpiredTokenException`: run `aws login` and re-run. Re-running is safe.
-- Not built yet: `status`, `users`, `purge-snapshots`.
+- Not built yet: `status`, `purge-snapshots`.
