@@ -119,3 +119,28 @@ test("showProgress prints plain lines when output isn't a terminal", () => {
   );
   assert.doesNotMatch(written, /\x1b\[/, "no escape codes in plain output");
 });
+
+test("renderBlock shows a waiting row with no time", () => {
+  const block: Block = { ...running, rows: [{ name: "Laminar app", status: "waiting", seconds: 2, detail: "waiting" }] };
+  assert.equal(plain(renderBlock(block, 0))[2], "│    · Laminar app                    waiting");
+});
+
+test("progressBlock marks a group that's only waiting", () => {
+  const progress = startProgress(planOf(["aws_cloudwatch_log_group.laminar", "aws_ecs_service.frontend"]), "build", 0);
+  applyEvent(progress, start("aws_cloudwatch_log_group.laminar"), 0);
+  applyEvent(progress, complete("aws_cloudwatch_log_group.laminar"), 2000);
+  const block = progressBlock(progress, { title: "Building Laminar", now: 300_000 });
+  assert.deepEqual(block.rows, [{ name: "Laminar app", status: "waiting", seconds: 2, detail: "waiting" }]);
+});
+
+test("renderBlock widens the name column for long names so times line up", () => {
+  const block: Block = {
+    ...running,
+    rows: [
+      { name: "Storage bucket", status: "done", seconds: 4 },
+      { name: "Old-version cleanup rule", status: "done", seconds: 57 },
+    ],
+  };
+  const [first, second] = plain(renderBlock(block, 0)).slice(2);
+  assert.equal(first.indexOf("4s") + 1, second.indexOf("57s") + 2, "times end in the same column");
+});

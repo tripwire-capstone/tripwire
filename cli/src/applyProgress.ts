@@ -7,6 +7,8 @@ import type { StackName } from "./tfvars.js";
 export interface LiveApplyOptions {
   title: string;
   action: ProgressAction;
+  // Whose group table to use
+  stack: StackName;
   // e.g. "usually 8–10 minutes"
   estimate?: string;
   // After this long, a calm "taking longer than usual" line appears
@@ -29,7 +31,7 @@ export async function applyWithProgress(
   plan: Plan,
   options: LiveApplyOptions,
 ): Promise<void> {
-  const progress = startProgress(plan, options.action, Date.now());
+  const progress = startProgress(plan, options.action, Date.now(), options.stack);
   let status: Block["status"] = "running";
   const display = showProgress(() =>
     progressBlock(progress, {

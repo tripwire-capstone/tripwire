@@ -1,7 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { sameNameServers } from "./dns.js";
-import { applyErrorMessage, dataLosses, findResource, type Plan, type State } from "./terraform.js";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Log } from "./run.js";
+import {
+  applyErrorMessage,
+  dataLosses,
+  findResource,
+  isDownloadLine,
+  stackDir,
+  tfInit,
+  type Plan,
+  type State,
+} from "./terraform.js";
 
 function plan(changes: Record<string, string[]>): Plan {
   return {
@@ -70,4 +83,49 @@ test("applyErrorMessage shows each Terraform error's summary and detail", () => 
     message,
     "creating EC2 Instance\nInsufficientInstanceCapacity: not enough t4g.medium capacity\n\nsecond error",
   );
+});
+
+test("isDownloadLine is true only when init really downloads", () => {
+  assert.equal(isDownloadLine("- Installing hashicorp/aws v6.71.0..."), true);
+  assert.equal(isDownloadLine("- Using hashicorp/aws v6.71.0 from the shared cache directory"), false);
+  assert.equal(isDownloadLine("- Using previously-installed hashicorp/aws v6.71.0"), false);
+  assert.equal(isDownloadLine("- Installed hashicorp/aws v6.71.0 (signed by HashiCorp)"), false);
+});
+
+// Runs tfInit against a fake terraform that prints lines
+async function initWith(lines: string[]): Promise<number> {
+  process.env.TRIPWIRE_HOME = mkdtempSync(join(tmpdir(), "tripwire-init-test-"));
+  delete process.env.TF_PLUGIN_CACHE_DIR;
+  process.env.TF_CLI_CONFIG_FILE = join(tmpdir(), "tripwire-no-such-terraformrc");
+  mkdirSync(stackDir("stack"), { recursive: true });
+  const bin = mkdtempSync(join(tmpdir(), "tripwire-fake-terraform-"));
+  const script = join(bin, "terraform");
+  writeFileSync(script, `#!/bin/sh\n${lines.map((line) => `echo '${line}'`).join("\n")}\n`);
+  chmodSync(script, 0o755);
+  const realPath = process.env.PATH;
+  process.env.PATH = bin;
+  let calls = 0;
+  try {
+    await tfInit(new Log("test"), "stack", () => calls++);
+  } finally {
+    process.env.PATH = realPath;
+  }
+  return calls;
+}
+
+test("tfInit reports a download once, however many providers download", async () => {
+  const calls = await initWith([
+    "Initializing provider plugins...",
+    "- Installing hashicorp/aws v6.71.0...",
+    "- Installing hashicorp/random v3.9.1...",
+  ]);
+  assert.equal(calls, 1);
+});
+
+test("tfInit reports nothing when every provider comes from the cache", async () => {
+  const calls = await initWith([
+    "- Using hashicorp/aws v6.71.0 from the shared cache directory",
+    "- Using previously-installed hashicorp/random v3.9.1",
+  ]);
+  assert.equal(calls, 0);
 });
