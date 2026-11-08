@@ -1,0 +1,6 @@
+# Downloaded by setup.sh (about 1 GB)
+.tau2-bench/
+# Run outputs
+runs/
+# API keys
+.env

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Launcher for tau_traffic.py: runs it in tau2-bench's Python environment.
+#
+#   ./tau-traffic                      wizard
+#   ./tau-traffic --domain retail -n 3 --yes
+#   ./tau-traffic view runs/<run>      open a run in tau2's viewer
+#   ./tau-traffic --help               all flags
+#
+# Works from any folder; runs/ and .env are always this folder's.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$HERE"
+
+# tau2-bench location: TAU2_BENCH_DIR (shell or .env), else ./.tau2-bench (setup.sh puts it there)
+if [[ -z "${TAU2_BENCH_DIR:-}" && -f .env ]]; then
+  TAU2_BENCH_DIR="$(sed -n 's/^[[:space:]]*TAU2_BENCH_DIR[[:space:]]*=[[:space:]]*//p' .env | tail -n 1 | tr -d "\"'")"
+fi
+TAU2_BENCH_DIR="${TAU2_BENCH_DIR:-$HERE/.tau2-bench}"
+TAU2_BENCH_DIR="${TAU2_BENCH_DIR/#\~/$HOME}"
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "uv is not installed. See README.md (Setup)." >&2
+  exit 1
+fi
+if [[ ! -d "$TAU2_BENCH_DIR/src/tau2" ]]; then
+  echo "tau2-bench not found at $TAU2_BENCH_DIR. Run ./setup.sh first." >&2
+  exit 1
+fi
+
+run=(uv run --quiet --project "$TAU2_BENCH_DIR" --extra knowledge)
+
+if [[ "${1:-}" == "view" ]]; then
+  if [[ -z "${2:-}" ]]; then
+    echo "usage: ./tau-traffic view runs/<run>   (folder names are in runs/)" >&2
+    exit 1
+  fi
+  target="$2"
+  [[ -d "$target" ]] && target="$target/results.json"
+  exec "${run[@]}" tau2 view --file "$target"
+fi
+
+export TAU_TRAFFIC_LAUNCHER="./tau-traffic"
+exec "${run[@]}" --with "lmnr==0.8.9" --with questionary python tau_traffic.py "$@"
