@@ -117,25 +117,21 @@ SEED_RANGE = (1, 9999)  # default seed is picked at random from this range
 SPACINGS = ("regular", "random")
 
 # Typical tokens per conversation, for the estimate shown before a run. The run's
-# summary reports the real cost tau2 measured. Calibrated Nov 8, 2026 from real runs
-# (gpt-4o-mini agent, gpt-4.1-mini customer): retail ~$0.009 (8 conversations) and
-# banking ~$0.009 (3) per conversation. The agent re-sends its policy + tool descriptions (~5K tokens in
-# retail) on every LLM call and makes 10-25 calls per conversation, which is why the
-# agent is most of the cost. Airline is assumed to match retail; telecom is a guess
-# (its only real run looped before the agent loop guard existed).
-_RETAIL_AGENT = {"input": 70_000, "cached_share": 0.9, "output": 1_500}
-_CUSTOMER = {"input": 7_000, "cached_share": 0.3, "output": 250}
+# summary reports the real cost tau2 measured. Calibrated Nov 8, 2026 from 51 real
+# conversations (gpt-4o-mini agent, gpt-4.1-mini customer): retail $0.0081 (18),
+# airline $0.0087 (10), banking $0.0085 (13), telecom $0.0278 (10) per conversation.
+# The agent is most of the cost: it re-sends its policy + tool descriptions on every
+# LLM call and makes 10-25 calls per conversation (telecom's agent looks up dozens of
+# records, hence ~3x).
 TOKEN_PROFILES = {
-    "retail": {"agent": _RETAIL_AGENT, "customer": _CUSTOMER},
-    "airline": {"agent": _RETAIL_AGENT, "customer": _CUSTOMER},
-    "banking_knowledge": {
-        "agent": {"input": 60_000, "cached_share": 0.9, "output": 1_500},
-        "customer": _CUSTOMER,
-    },
-    "telecom": {
-        "agent": {"input": 120_000, "cached_share": 0.9, "output": 1_500},
-        "customer": {"input": 10_000, "cached_share": 0.3, "output": 300},
-    },
+    "retail": {"agent": {"input": 57_000, "cached_share": 0.9, "output": 1_500},
+               "customer": {"input": 7_000, "cached_share": 0.3, "output": 250}},
+    "airline": {"agent": {"input": 59_000, "cached_share": 0.9, "output": 1_500},
+                "customer": {"input": 8_000, "cached_share": 0.3, "output": 250}},
+    "banking_knowledge": {"agent": {"input": 52_000, "cached_share": 0.9, "output": 1_500},
+                          "customer": {"input": 9_500, "cached_share": 0.3, "output": 250}},
+    "telecom": {"agent": {"input": 260_000, "cached_share": 0.9, "output": 1_500},
+                "customer": {"input": 17_000, "cached_share": 0.3, "output": 250}},
 }
 
 # The only LLM call that belongs to "the app"; every other tau2 call_name

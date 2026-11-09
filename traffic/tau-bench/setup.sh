@@ -28,9 +28,11 @@ if [[ -n "${TAU2_BENCH_DIR:-}" ]]; then
     echo "TAU2_BENCH_DIR is set to $dir, but tau2-bench isn't there." >&2
     exit 1
   fi
-  current="$(git -C "$dir" rev-parse HEAD 2>/dev/null || echo unknown)"
-  if [[ "$current" != "$TAU2_COMMIT" ]]; then
-    echo "Note: $dir is at $current; tau-traffic was tested with $TAU2_COMMIT."
+  # Fine if the tested version is in its history (e.g. with your own commits on top).
+  if ! git -C "$dir" merge-base --is-ancestor "$TAU2_COMMIT" HEAD 2>/dev/null; then
+    current="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    echo "Note: $dir is at $current, which doesn't include the version tau-traffic was"
+    echo "tested with (${TAU2_COMMIT:0:7}). It may still work; if not, check out that version."
   fi
 else
   dir="$HERE/.tau2-bench"
@@ -55,8 +57,13 @@ uv run --quiet --project "$dir" --extra knowledge --with "lmnr==0.8.9" --with qu
 
 if [[ ! -f .env ]]; then
   cp .env.example .env
-  echo "Created .env: add your OPENAI_API_KEY and LMNR_PROJECT_API_KEY to it."
+  echo "Created .env from .env.example."
 fi
 
 echo
-echo "Done. Next: fill in .env, then run ./tau-traffic"
+if grep -Eq '^[[:space:]]*OPENAI_API_KEY[[:space:]]*=[[:space:]]*[^[:space:]]' .env \
+   && grep -Eq '^[[:space:]]*LMNR_PROJECT_API_KEY[[:space:]]*=[[:space:]]*[^[:space:]]' .env; then
+  echo "Done. Next: ./tau-traffic"
+else
+  echo "Done. Next: add your OPENAI_API_KEY and LMNR_PROJECT_API_KEY to .env, then run ./tau-traffic"
+fi

@@ -74,33 +74,34 @@ Every trace has `app_version` in its metadata. The simulated customer and the gr
 
 | Domain | agent gpt-4o-mini | agent gpt-4.1-mini | agent gpt-4.1 | Measured |
 |---|---|---|---|---|
-| retail | $0.009 | $0.014 | $0.060 | $0.009 (8 conversations, gpt-4o-mini) |
-| airline | $0.009 | $0.014 | $0.060 | not yet |
-| banking_knowledge | $0.008 | $0.013 | $0.054 | $0.009 (3 conversations, gpt-4o-mini) |
-| telecom | $0.014 | $0.022 | $0.094 | not yet |
+| retail | $0.008 | $0.012 | $0.052 | $0.008 (18 conversations, gpt-4o-mini) |
+| airline | $0.009 | $0.013 | $0.053 | $0.009 (10 conversations, gpt-4o-mini) |
+| banking_knowledge | $0.009 | $0.013 | $0.049 | $0.009 (13 conversations, gpt-4o-mini) |
+| telecom | $0.028 | $0.042 | $0.19 | $0.028 (10 conversations, gpt-4o-mini) |
 
 **Batches** (default models; measured where available):
 
 | Domain | 10 conversations | 50 conversations | 100 conversations | 500 conversations |
 |---|---|---|---|---|
-| retail | $0.088 | $0.44 | $0.88 | $4.40 |
-| airline (estimate) | $0.092 | $0.46 | $0.92 | $4.62 |
-| banking_knowledge | $0.086 | $0.43 | $0.86 | $4.30 |
-| telecom (estimate) | $0.14 | $0.72 | $1.44 | $7.19 |
+| retail | $0.081 | $0.40 | $0.81 | $4.05 |
+| airline | $0.087 | $0.43 | $0.87 | $4.35 |
+| banking_knowledge | $0.085 | $0.43 | $0.85 | $4.25 |
+| telecom | $0.28 | $1.39 | $2.78 | $13.90 |
 
 **Spread over time, per day** (default models):
 
 | Domain | one every 30 min (48/day) | one every 10 min (144/day) | one every 2 min (720/day) |
 |---|---|---|---|
-| retail | $0.42 | $1.27 | $6.34 |
-| airline (estimate) | $0.44 | $1.33 | $6.66 |
-| banking_knowledge | $0.41 | $1.24 | $6.19 |
-| telecom (estimate) | $0.69 | $2.07 | $10.35 |
+| retail | $0.39 | $1.17 | $5.83 |
+| airline | $0.42 | $1.25 | $6.26 |
+| banking_knowledge | $0.41 | $1.22 | $6.12 |
+| telecom | $1.33 | $4.00 | $20.02 |
 <!-- cost-tables:end -->
 
 - Most of the cost is the support agent: it re-reads its policy and tool list on every
-  step and takes 10–25 steps per conversation. Single conversations range from about half
-  to double the average.
+  step and takes 10–25 steps per conversation (telecom's agent looks up dozens of records,
+  so it costs about 3× more). Single conversations range from about a third to over twice
+  the average.
 - The default **budget is $1.00 per run**. The plan warns when the estimate is higher;
   raise it with `--budget` (or in the wizard's advanced settings).
 - To update these numbers after more runs: edit `MEASURED` in `cost_guide.py` (and
@@ -110,8 +111,11 @@ Every trace has `app_version` in its metadata. The simulated customer and the gr
 
 - **Many conversations fail, even with no bugs.** τ-bench grades strictly (the final
   database must match exactly), and the default agent, gpt-4o-mini, is a small model: in
-  our first retail runs 3 of 8 passed. The failures are real agent mistakes, often silent
-  (the customer leaves happy with a wrong result), which is exactly what Tripwire is for.
+  our first 40 test conversations 7 passed (retail 3 of 10, airline 4 of 10, banking and
+  telecom none). The failures are real agent mistakes, often silent (the customer leaves
+  happy with a wrong result), which is exactly what Tripwire is for. Retail and airline
+  give the most varied failures; banking's are mostly one kind (the agent never finds the
+  special tools its documents describe), and telecom's agent often runs out of steps.
 - **Stopping a run:** Ctrl+C once stops new conversations and lets running ones finish;
   twice saves immediately and quits.
 - **Long runs** keep the computer awake by default (Linux: `systemd-inhibit`, macOS:
@@ -120,6 +124,7 @@ Every trace has `app_version` in its metadata. The simulated customer and the gr
 - **Loop guards** (on by default): a simulated customer repeating itself ends the
   conversation; an agent repeating the same tool call 3 times in one turn gets a fallback
   reply ("Sorry, I'm having trouble looking that up…"), like a real app's tool-call cap.
+  That reply is always the same text, so expect it to form its own cluster in Laminar.
 - **Run labels** stay local unless you choose to send them to Laminar. Don't put bug names
   or expected results in a label you send.
 - Already have τ-bench somewhere? Set `TAU2_BENCH_DIR` in `.env` and run `setup.sh`.

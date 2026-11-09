@@ -25,8 +25,10 @@ import tau_traffic as tt  # noqa: E402
 # Real average cost per conversation with the default models
 # (gpt-4o-mini agent, gpt-4.1-mini customer): domain -> ($ per conversation, conversations).
 MEASURED = {
-    "retail": (0.0088, 8),
-    "banking_knowledge": (0.0086, 3),
+    "retail": (0.0081, 18),
+    "airline": (0.0087, 10),
+    "banking_knowledge": (0.0085, 13),
+    "telecom": (0.0278, 10),
 }
 MEASURED_ON = "Nov 8, 2026"
 
@@ -150,7 +152,7 @@ def chart(batch=100):
     p.append(f'<line class="base" x1="{left}" y1="{top - 6}" x2="{left}" '
              f'y2="{top + row_h * len(rows)}" stroke-width="1.5"/>')
     p.append(f'<text class="tick" x="24" y="{H - 12}" font-size="11">Measured {MEASURED_ON}. '
-             f"Real runs vary: a single conversation cost from about half to double the average."
+             f"Real runs vary: single conversations cost from about a third to over twice the average."
              f"</text>")
     p.append("</svg>")
     return "\n".join(p)
