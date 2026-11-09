@@ -22,17 +22,23 @@ except ImportError:
     sys.modules["dotenv"] = types.SimpleNamespace(load_dotenv=lambda *a, **k: None)
 import tau_traffic as tt  # noqa: E402
 
-# Real average cost per conversation with the default models
-# (gpt-4o-mini agent, gpt-4.1-mini customer): domain -> ($ per conversation, conversations).
+# Real average cost per conversation:
+#   (domain, agent model, customer model) -> ($ per conversation, conversations measured)
 MEASURED = {
-    "retail": (0.0081, 18),
-    "airline": (0.0087, 10),
-    "banking_knowledge": (0.0085, 13),
-    "telecom": (0.0278, 10),
+    ("retail", "gpt-6-luna", "gpt-6-luna"): (0.00168, 20),
+    ("airline", "gpt-6-luna", "gpt-6-luna"): (0.00182, 10),
+    ("banking_knowledge", "gpt-6-luna", "gpt-6-luna"): (0.01396, 6),
+    ("telecom", "gpt-6-luna", "gpt-6-luna"): (0.00226, 10),
+    ("retail", "gpt-4o-mini", "gpt-4.1-mini"): (0.00944, 28),
+    ("airline", "gpt-4o-mini", "gpt-4.1-mini"): (0.00867, 10),
+    ("banking_knowledge", "gpt-4o-mini", "gpt-4.1-mini"): (0.00854, 13),
+    ("telecom", "gpt-4o-mini", "gpt-4.1-mini"): (0.02779, 10),
 }
 MEASURED_ON = "Nov 8, 2026"
 
 AGENT, CUSTOMER = tt.DEFAULTS["agent_model"], tt.DEFAULTS["customer_model"]
+# The earlier defaults, measured too; shown as a second column in the tables.
+OLDER = ("gpt-4o-mini", "gpt-4.1-mini")
 
 
 def estimate(domain, agent=AGENT, customer=CUSTOMER, num=1):
@@ -40,15 +46,22 @@ def estimate(domain, agent=AGENT, customer=CUSTOMER, num=1):
                                             customer_model=customer, num=num))
 
 
-def per_conversation(domain):
-    """(cost, measured?) for the default models: measured if we have it, else estimate."""
-    if domain in MEASURED:
-        return MEASURED[domain][0], True
-    return estimate(domain), False
+def per_conversation(domain, agent=AGENT, customer=CUSTOMER):
+    """(cost, measured?): measured if we have it, else the tool's estimate."""
+    if (domain, agent, customer) in MEASURED:
+        return MEASURED[(domain, agent, customer)][0], True
+    return estimate(domain, agent, customer), False
+
+
+def measured_note(domain, agent=AGENT, customer=CUSTOMER):
+    m = MEASURED.get((domain, agent, customer))
+    return f"{m[1]} conversations" if m else "estimate"
 
 
 def money(x):
-    return f"${x:,.2f}" if x >= 0.995 else f"${x:.2f}" if x >= 0.1 else f"${x:.3f}"
+    if x >= 0.1:
+        return f"${x:,.2f}"
+    return f"${x:.3f}" if x >= 0.01 else f"${x:.4f}"
 
 
 # --------------------------------------------------------------------------- tables
@@ -57,16 +70,25 @@ def money(x):
 def tables():
     domains = list(tt.DOMAINS)
     out = []
-    out.append(f"**Per conversation** (simulated customer: {CUSTOMER}):\n")
-    head = "| Domain | " + " | ".join(f"agent {m}" for m in tt.MODELS) + " | Measured |"
-    out += [head, "|" + "---|" * (len(tt.MODELS) + 2)]
+    out.append("**Per conversation:**\n")
+    out += [f"| Domain | {AGENT} agent + {CUSTOMER} customer (default) | "
+            f"{OLDER[0]} agent + {OLDER[1]} customer |",
+            "|---|---|---|"]
     for d in domains:
-        cells = [money(estimate(d, agent=m)) for m in tt.MODELS]
-        meas = (f"{money(MEASURED[d][0])} ({MEASURED[d][1]} conversations, {AGENT})"
-                if d in MEASURED else "not yet")
-        out.append(f"| {d} | " + " | ".join(cells) + f" | {meas} |")
+        cells = []
+        for agent, customer in ((AGENT, CUSTOMER), OLDER):
+            c, _ = per_conversation(d, agent, customer)
+            cells.append(f"{money(c)} ({measured_note(d, agent, customer)})")
+        out.append(f"| {d} | " + " | ".join(cells) + " |")
+    others = [m for m in tt.MODELS if m not in (AGENT, OLDER[0])]
+    if others:
+        out.append("")
+        out.append(f"Other agent models (with the {CUSTOMER} customer; rough estimates, not "
+                   f"measured): " + "; ".join(
+                       f"{m} " + ", ".join(f"{d} {money(estimate(d, agent=m))}" for d in domains)
+                       for m in others) + ".")
     out.append("")
-    out.append(f"**Batches** (default models; measured where available):\n")
+    out.append("**Batches** (default models):\n")
     sizes = (10, 50, 100, 500)
     out += ["| Domain | " + " | ".join(f"{n} conversations" for n in sizes) + " |",
             "|" + "---|" * (len(sizes) + 1)]
@@ -145,7 +167,7 @@ def chart(batch=100):
                  f"({money(c)} each, {'measured' if measured else 'estimate'})</title></path>")
         p.append(f'<text class="cat" x="{left - 12}" y="{y + bar_h / 2 + 4.5:.1f}" '
                  f'font-size="13" text-anchor="end">{d}</text>')
-        note = (f"measured, {MEASURED[d][1]} conversations" if measured else "estimate")
+        note = f"measured, {measured_note(d)}" if measured else "estimate"
         p.append(f'<text x="{x(c * batch) + 8:.1f}" y="{y + bar_h / 2 + 4.5:.1f}" font-size="13">'
                  f'<tspan class="val" font-weight="600">{money(c * batch)}</tspan>'
                  f'<tspan class="sub"> · {note}</tspan></text>')

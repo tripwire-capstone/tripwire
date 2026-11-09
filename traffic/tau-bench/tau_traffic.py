@@ -89,11 +89,37 @@ MODES = {
 # output) for the cost estimate. Any other model name LiteLLM understands can be typed
 # in with "Other"; its cost estimate shows as unknown.
 MODELS = {
+    "gpt-6-luna": (0.10, 0.01, 0.50),
     "gpt-4o-mini": (0.15, 0.075, 0.60),
     "gpt-4.1-mini": (0.40, 0.10, 1.60),
     "gpt-4.1": (2.00, 0.50, 8.00),
 }
 OTHER_MODEL = "__other__"
+
+# One-line notes shown next to each model in the wizard's agent question (how each
+# behaved as the support agent in real runs, Nov 8, 2026).
+MODEL_NOTES = {
+    "gpt-6-luna": "newest and cheapest; mistakes mostly silent; ~1 in 8 replies is raw JSON",
+    "gpt-4o-mini": "older; more varied, louder mistakes (transfers to a human, frustration)",
+    "gpt-4.1-mini": "older; more capable than gpt-4o-mini, pricier",
+    "gpt-4.1": "older and expensive",
+}
+
+# Extra settings some models need, passed to tau2 as LLM arguments.
+#   gpt-6-luna is a reasoning model. Through Chat Completions (how tau2 calls it),
+#   function calling only works with reasoning off, so reasoning_effort must be "none".
+#   It goes in extra_body because tau2's LiteLLM silently drops reasoning_effort="none"
+#   when passed normally (checked against a fake OpenAI endpoint, Nov 8, 2026).
+MODEL_SETTINGS = {
+    "gpt-6-luna": {"extra_body": {"reasoning_effort": "none"}},
+}
+
+
+def model_settings(model):
+    """LLM arguments for a model name, with or without the 'openai/' prefix."""
+    name = model.split("/", 1)[1] if model.lower().startswith("openai/") else model
+    return {k: (dict(v) if isinstance(v, dict) else v)
+            for k, v in MODEL_SETTINGS.get(name, {}).items()}
 
 # Which API key each model provider needs. LiteLLM names models "<provider>/<model>";
 # a name without a provider prefix (gpt-4o-mini) is OpenAI. To support another
@@ -106,8 +132,8 @@ PROVIDER_KEYS = {
 DEFAULTS = {
     "num": 3,
     "mode": "turn",
-    "agent_model": "gpt-4o-mini",
-    "customer_model": "gpt-4.1-mini",
+    "agent_model": "gpt-6-luna",
+    "customer_model": "gpt-6-luna",
     "app_version": "v1",
     "workers": 3,
     "max_steps": 80,
@@ -116,22 +142,32 @@ DEFAULTS = {
 SEED_RANGE = (1, 9999)  # default seed is picked at random from this range
 SPACINGS = ("regular", "random")
 
-# Typical tokens per conversation, for the estimate shown before a run. The run's
-# summary reports the real cost tau2 measured. Calibrated Nov 8, 2026 from 51 real
-# conversations (gpt-4o-mini agent, gpt-4.1-mini customer): retail $0.0081 (18),
-# airline $0.0087 (10), banking $0.0085 (13), telecom $0.0278 (10) per conversation.
-# The agent is most of the cost: it re-sends its policy + tool descriptions on every
-# LLM call and makes 10-25 calls per conversation (telecom's agent looks up dozens of
-# records, hence ~3x).
+# Typical tokens per conversation, per domain and per model (models behave differently:
+# gpt-6-luna has shorter conversations, but searches far more in banking). Used for the
+# estimate shown before a run; the run's summary reports the real cost tau2 measured.
+# Fitted Nov 8, 2026 to real runs (cost_guide.py has the measured averages). A model not
+# listed for a role uses the default model's numbers.
+def _p(tokens_in, cached_share, tokens_out):
+    return {"input": tokens_in, "cached_share": cached_share, "output": tokens_out}
+
+
 TOKEN_PROFILES = {
-    "retail": {"agent": {"input": 57_000, "cached_share": 0.9, "output": 1_500},
-               "customer": {"input": 7_000, "cached_share": 0.3, "output": 250}},
-    "airline": {"agent": {"input": 59_000, "cached_share": 0.9, "output": 1_500},
-                "customer": {"input": 8_000, "cached_share": 0.3, "output": 250}},
-    "banking_knowledge": {"agent": {"input": 52_000, "cached_share": 0.9, "output": 1_500},
-                          "customer": {"input": 9_500, "cached_share": 0.3, "output": 250}},
-    "telecom": {"agent": {"input": 260_000, "cached_share": 0.9, "output": 1_500},
-                "customer": {"input": 17_000, "cached_share": 0.3, "output": 250}},
+    "retail": {
+        "agent": {"gpt-6-luna": _p(61_000, 0.94, 600), "gpt-4o-mini": _p(69_000, 0.9, 1_500)},
+        "customer": {"gpt-6-luna": _p(5_100, 0.35, 200), "gpt-4.1-mini": _p(8_000, 0.3, 250)},
+    },
+    "airline": {
+        "agent": {"gpt-6-luna": _p(67_000, 0.94, 720), "gpt-4o-mini": _p(59_000, 0.9, 1_500)},
+        "customer": {"gpt-6-luna": _p(5_800, 0.35, 200), "gpt-4.1-mini": _p(8_000, 0.3, 250)},
+    },
+    "banking_knowledge": {
+        "agent": {"gpt-6-luna": _p(810_000, 0.94, 1_400), "gpt-4o-mini": _p(52_000, 0.9, 1_500)},
+        "customer": {"gpt-6-luna": _p(14_300, 0.8, 200), "gpt-4.1-mini": _p(9_500, 0.3, 250)},
+    },
+    "telecom": {
+        "agent": {"gpt-6-luna": _p(97_000, 0.94, 470), "gpt-4o-mini": _p(260_000, 0.9, 1_500)},
+        "customer": {"gpt-6-luna": _p(34_000, 0.88, 200), "gpt-4.1-mini": _p(17_000, 0.3, 250)},
+    },
 }
 
 # The only LLM call that belongs to "the app"; every other tau2 call_name
@@ -365,8 +401,9 @@ def ask_missing(args):
         except ValueError as e:
             return str(e)
 
-    def choose_model(message, default):
-        choices = [questionary.Choice(m, value=m) for m in MODELS]
+    def choose_model(message, default, notes=False):
+        choices = [questionary.Choice(f"{m}: {MODEL_NOTES[m]}" if notes and m in MODEL_NOTES
+                                      else m, value=m) for m in MODELS]
         choices.append(questionary.Choice("Other (type a model name)", value=OTHER_MODEL))
         model = choose(message, choices, default)
         if model == OTHER_MODEL:
@@ -406,7 +443,8 @@ def ask_missing(args):
         args.mode = choose("Trace mode:", [questionary.Choice(f"{m}: {d}", value=m)
                                            for m, d in MODES.items()], DEFAULTS["mode"])
     if args.agent_model is None:
-        args.agent_model = choose_model("Agent model (the app):", DEFAULTS["agent_model"])
+        args.agent_model = choose_model("Agent model (the app):", DEFAULTS["agent_model"],
+                                        notes=True)
     if args.customer_model is None:
         args.customer_model = choose_model("Customer model (simulated customer):",
                                            DEFAULTS["customer_model"])
@@ -495,10 +533,10 @@ def estimate_cost(args):
     """Rough $ for the run, or None if a model has no price listed."""
     profile = TOKEN_PROFILES[args.domain]
     total = 0.0
-    for model, tokens in ((args.agent_model, profile["agent"]),
-                          (args.customer_model, profile["customer"])):
+    for role, model in (("agent", args.agent_model), ("customer", args.customer_model)):
         if model not in MODELS:
             return None
+        tokens = profile[role].get(model) or profile[role][DEFAULTS[f"{role}_model"]]
         price_in, price_cached, price_out = MODELS[model]
         cached = tokens["input"] * tokens["cached_share"]
         fresh = tokens["input"] - cached
@@ -531,7 +569,10 @@ def laminar_target():
 
 def print_plan(args):
     estimate = estimate_cost(args)
-    est = f"~${estimate:.2f}" if estimate is not None else "unknown (model not in price list)"
+    if estimate is None:
+        est = "unknown (model not in price list)"
+    else:
+        est = f"~${estimate:.2f}" if estimate >= 0.1 else f"~${estimate:.3f}"
     guards = []
     guards.append("customer loop guard " + ("off" if args.no_loop_guard else "on"))
     guards.append("agent loop guard " + ("off" if args.no_agent_loop_guard else "on"))
@@ -602,6 +643,15 @@ def untraced():
 # FALLBACK_REPLY. Each conversation runs in one worker thread, so this is per conversation.
 _pending_fallback = threading.local()
 
+# The conversation running in this thread (simulation ID + RunNotes), set by the
+# orchestrator hook, so the LLM wrapper can record per-conversation notes.
+_conversation = threading.local()
+
+# The simulated customer sometimes returns an empty message (seen with gpt-6-luna as
+# the customer in banking_knowledge), which tau2 rejects and the conversation crashes.
+# That's a harness glitch, not the app's: ask the customer again, up to this many times.
+EMPTY_CUSTOMER_RETRIES = 2
+
 
 def keep_harness_untraced():
     """Wrap tau2's single LLM entry point so only the agent's calls are traced.
@@ -620,7 +670,16 @@ def keep_harness_untraced():
                 return AssistantMessage.text(FALLBACK_REPLY, cost=0.0)
             return original(*args, call_name=call_name, **kwargs)
         with untraced():
-            return original(*args, call_name=call_name, **kwargs)
+            reply = original(*args, call_name=call_name, **kwargs)
+            if call_name == "user_simulator_response":
+                for _ in range(EMPTY_CUSTOMER_RETRIES):
+                    if (reply.content or "").strip() or reply.tool_calls:
+                        break
+                    notes = getattr(_conversation, "notes", None)
+                    if notes is not None:
+                        notes.add_customer_retry(getattr(_conversation, "sim_id", None))
+                    reply = original(*args, call_name=call_name, **kwargs)
+            return reply
 
     llm_utils._generate_once = _generate_once
 
@@ -639,6 +698,7 @@ class RunNotes:
         self._lock = threading.Lock()
         self._stops = {}
         self._agent_loops = Counter()
+        self._customer_retries = Counter()
 
     def record_stop(self, simulation_id, reason):
         with self._lock:
@@ -655,6 +715,14 @@ class RunNotes:
     def agent_loops(self, simulation_id):
         with self._lock:
             return self._agent_loops[simulation_id]
+
+    def add_customer_retry(self, simulation_id):
+        with self._lock:
+            self._customer_retries[simulation_id] += 1
+
+    def customer_retries(self, simulation_id):
+        with self._lock:
+            return self._customer_retries[simulation_id]
 
 
 def install_hooks(mode, send, loop_guard, agent_loop_guard, notes):
@@ -690,6 +758,7 @@ def install_hooks(mode, send, loop_guard, agent_loop_guard, notes):
         self._tt_has_input = False
         self._tt_last_customer = None
         self._tt_turn_calls = Counter()  # agent tool calls in the current turn
+        _conversation.sim_id, _conversation.notes = self.simulation_id, notes
         _pending_fallback.active = False
         if structured and mode == "conversation":
             self._tt_convo = Laminar.start_active_span(
@@ -898,9 +967,9 @@ def run_conversations(args, tasks, notes, writer):
     config = TextRunConfig(
         domain=args.domain,
         llm_agent=args.agent_model,
-        llm_args_agent={},
+        llm_args_agent=model_settings(args.agent_model),
         llm_user=args.customer_model,
-        llm_args_user={},
+        llm_args_user=model_settings(args.customer_model),
         max_steps=args.max_steps,
         log_level="ERROR",
         **DOMAINS[args.domain].get("run_config", {}),
@@ -1139,6 +1208,7 @@ class OutputWriter:
                     "ended": how_it_ended(sim, notes),
                     "turns": turns,
                     "agent_loops": loops,
+                    "customer_retries": notes.customer_retries(sim.id),
                     "agent_cost": round(agent_cost, 6),
                     "customer_cost": round(customer_cost, 6),
                 })
@@ -1210,6 +1280,7 @@ class OutputWriter:
             "failed": sum(1 for r in done if r["passed"] is False),
             "ended": dict(ended),
             "agent_loops": sum(r.get("agent_loops") or 0 for r in done),
+            "customer_retries": sum(r.get("customer_retries") or 0 for r in done),
             "cost": {"total": round(total_cost, 4),
                      "agent": round(sum(r.get("agent_cost") or 0 for r in done), 4),
                      "customer": round(sum(r.get("customer_cost") or 0 for r in done), 4)},
