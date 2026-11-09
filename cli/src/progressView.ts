@@ -59,6 +59,7 @@ function rowSymbol(status: RowStatus, frame: number): string {
     case "running":
       return styleText("magenta", FRAMES[frame % FRAMES.length]);
     case "pending":
+    case "waiting":
       return styleText("dim", PENDING);
   }
 }
@@ -70,10 +71,16 @@ export function fitToWidth(line: string, columns: number): string {
   return `${plain.slice(0, Math.max(0, columns - 1))}…`;
 }
 
-function rowLine(row: Row, frame: number): string {
-  const time = row.status === "pending" ? "" : formatDuration(row.seconds);
+// The name column fits the longest name in the block (at least NAME_WIDTH), so times line up
+function nameWidth(rows: Row[]): number {
+  return Math.max(NAME_WIDTH, ...rows.map((row) => row.name.length));
+}
+
+function rowLine(row: Row, frame: number, width = NAME_WIDTH): string {
+  // Waiting rows show no time: the group isn't doing anything itself
+  const time = row.status === "pending" || row.status === "waiting" ? "" : formatDuration(row.seconds);
   const detail = row.detail ? `   ${styleText("dim", row.detail)}` : "";
-  return `${gray(S_BAR)}    ${rowSymbol(row.status, frame)} ${row.name.padEnd(NAME_WIDTH)} ${time.padStart(7)}${detail}`;
+  return `${gray(S_BAR)}    ${rowSymbol(row.status, frame)} ${row.name.padEnd(width)} ${time.padStart(7)}${detail}`;
 }
 
 // The block as lines; frame picks the spinner frame
@@ -87,7 +94,8 @@ export function renderBlock(block: Block, frame: number, columns = 80): string[]
   } else {
     header = `${styleText("red", S_STEP_ERROR)}  ${block.title} stopped ${gray(`[${formatDuration(block.seconds)}]`)}`;
   }
-  const lines = [gray(S_BAR), header, ...block.rows.map((row) => rowLine(row, frame))];
+  const width = nameWidth(block.rows);
+  const lines = [gray(S_BAR), header, ...block.rows.map((row) => rowLine(row, frame, width))];
   if (block.warning) lines.push(`${gray(S_BAR)}    ${styleText("yellow", block.warning)}`);
   return lines.map((line) => fitToWidth(line, columns));
 }
@@ -101,11 +109,12 @@ export function progressBlock(
   const status = options.status ?? "running";
   const rows = progress.groups.map((group) => {
     const groupStatus = statusOf(group);
+    const detail = groupStatus === "waiting" ? "waiting" : groupStatus === "running" ? group.note : undefined;
     return {
       name: group.name,
       status: groupStatus,
       seconds: groupSeconds(group, now),
-      ...(groupStatus === "running" && group.note ? { detail: group.note } : {}),
+      ...(detail ? { detail } : {}),
     };
   });
   const slow = status === "running" && usualSeconds !== undefined && isLongerThanUsual(progress, now, usualSeconds);
@@ -177,7 +186,7 @@ function plainDisplay(render: () => Block, output: Writable): ProgressDisplay {
     for (const row of block.rows) {
       if ((row.status === "done" || row.status === "failed") && !printed.has(row.name)) {
         printed.add(row.name);
-        output.write(`${stripVTControlCharacters(rowLine({ ...row, detail: undefined }, 0))}\n`);
+        output.write(`${stripVTControlCharacters(rowLine({ ...row, detail: undefined }, 0, nameWidth(block.rows)))}\n`);
       }
     }
     if (block.warning && !warned) {

@@ -42,17 +42,25 @@ function named(progress: ReturnType<typeof startProgress>, name: string) {
   return group;
 }
 
-test("every resource type in infra/stack is deliberately grouped or has no line", () => {
-  const dir = join(bundledInfraDir(), "stack");
+// Every resource type declared in one infra folder
+function resourceTypes(folder: string): Set<string> {
+  const dir = join(bundledInfraDir(), folder);
   const types = new Set<string>();
   for (const file of readdirSync(dir).filter((name) => name.endsWith(".tf"))) {
     for (const match of readFileSync(join(dir, file), "utf8").matchAll(/^resource "([a-z0-9_]+)"/gm)) {
       types.add(match[1]);
     }
   }
-  assert.ok(types.size > 30, "expected to find the stack's resources");
-  const unplaced = [...types].filter((type) => !groupFor(type) && !isNoLine(type));
-  assert.deepEqual(unplaced, []);
+  return types;
+}
+
+test("every resource type in each infra folder is deliberately grouped or has no line", () => {
+  for (const stack of ["bootstrap", "persistent", "stack"] as const) {
+    const types = resourceTypes(stack);
+    assert.ok(types.size > 0, `expected to find ${stack}'s resources`);
+    const unplaced = [...types].filter((type) => !groupFor(type, stack) && !isNoLine(type, stack));
+    assert.deepEqual(unplaced, [], `${stack} has resource types with no group`);
+  }
 });
 
 test("groupFor matches exact types and prefixes", () => {
@@ -95,7 +103,7 @@ test("groups run in parallel and finish when all their resources complete", () =
   assert.equal(statusOf(balancer), "running");
 
   applyEvent(progress, hook("apply_complete", "aws_vpc.main"), 5000);
-  assert.equal(statusOf(network), "running", "the subnet hasn't been done yet");
+  assert.equal(statusOf(network), "waiting", "the subnet hasn't started yet");
 
   applyEvent(progress, hook("apply_start", "aws_subnet.private[0]"), 5000);
   applyEvent(progress, hook("apply_complete", "aws_subnet.private[0]"), 9000);
@@ -146,4 +154,55 @@ test("isLongerThanUsual compares the whole step's time with the usual time", () 
   const progress = startProgress(planOf(["aws_vpc.main"]), "build", 0);
   assert.equal(isLongerThanUsual(progress, 14 * 60_000, 15 * 60), false);
   assert.equal(isLongerThanUsual(progress, 16 * 60_000, 15 * 60), true);
+});
+
+test("bootstrap shows the bucket and the slow cleanup rule with its note", () => {
+  const plan = planOf([
+    "aws_s3_bucket.state",
+    "aws_s3_bucket_versioning.state",
+    "aws_s3_bucket_lifecycle_configuration.state",
+  ]);
+  const progress = startProgress(plan, "build", 0, "bootstrap");
+  assert.deepEqual(progress.groups.map((group) => group.name), ["Storage bucket", "Old-version cleanup rule"]);
+  assert.equal(named(progress, "Old-version cleanup rule").note, "AWS takes about a minute to confirm this");
+});
+
+test("persistent shows secrets and the certificate, and the zone only when it's created", () => {
+  const plan = planOf([
+    "random_id.auth_secret",
+    "aws_ssm_parameter.auth_secret",
+    "aws_acm_certificate.main",
+    'aws_route53_record.validation["laminar.example.com"]',
+    "aws_acm_certificate_validation.main",
+  ]);
+  const progress = startProgress(plan, "build", 0, "persistent");
+  assert.deepEqual(progress.groups.map((group) => group.name), ["Secrets", "HTTPS certificate"]);
+  assert.equal(named(progress, "HTTPS certificate").note, "AWS verifying you own the domain, ~30 s");
+  const withZone = startProgress(planOf(["aws_route53_zone.main[0]"]), "build", 0, "persistent");
+  assert.deepEqual(withZone.groups.map((group) => group.name), ["DNS zone"]);
+});
+
+test("a group waits while nothing of its own runs, then runs again", () => {
+  const progress = startProgress(planOf(["aws_cloudwatch_log_group.laminar", "aws_ecs_service.frontend"]), "build", 0);
+  const app = named(progress, "Laminar app");
+  applyEvent(progress, hook("apply_start", "aws_cloudwatch_log_group.laminar"), 0);
+  assert.equal(statusOf(app), "running");
+  applyEvent(progress, hook("apply_complete", "aws_cloudwatch_log_group.laminar"), 2000);
+  assert.equal(statusOf(app), "waiting", "the ECS service waits for the database");
+  applyEvent(progress, hook("apply_start", "aws_ecs_service.frontend"), 461_000);
+  assert.equal(statusOf(app), "running");
+  applyEvent(progress, hook("apply_complete", "aws_ecs_service.frontend"), 462_000);
+  assert.equal(statusOf(app), "done");
+});
+
+test("groupSeconds counts only time spent working, not waiting", () => {
+  const progress = startProgress(planOf(["aws_cloudwatch_log_group.laminar", "aws_ecs_service.frontend"]), "build", 0);
+  const app = named(progress, "Laminar app");
+  applyEvent(progress, hook("apply_start", "aws_cloudwatch_log_group.laminar"), 0);
+  assert.equal(groupSeconds(app, 1500), 1.5, "counts up while running");
+  applyEvent(progress, hook("apply_complete", "aws_cloudwatch_log_group.laminar"), 2000);
+  assert.equal(groupSeconds(app, 300_000), 2, "frozen while waiting");
+  applyEvent(progress, hook("apply_start", "aws_ecs_service.frontend"), 461_000);
+  applyEvent(progress, hook("apply_complete", "aws_ecs_service.frontend"), 462_000);
+  assert.equal(groupSeconds(app, 500_000), 3, "2 s, then a 7-minute wait, then 1 s");
 });

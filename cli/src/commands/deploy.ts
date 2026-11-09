@@ -26,7 +26,7 @@ import {
   type Plan,
 } from "../terraform.js";
 import { stateBucketName, type Restore, type StackName } from "../tfvars.js";
-import { answer, step } from "../ui.js";
+import { answer, downloadingNote, step } from "../ui.js";
 import { CLI_VERSION } from "../version.js";
 
 const LITE_PRICE = "about $135/mo in us-east-1, plus usage";
@@ -67,7 +67,8 @@ async function applyStack(
   let changed: boolean;
   let plan: Plan | undefined;
   try {
-    await tfInit(log, stack);
+    await tfInit(log, stack, () => spin.message(downloadingNote(labels.title)));
+    spin.message(labels.title);
     changed = await tfPlan(log, stack, planArgs);
     if (changed) plan = await tfPlanJson(log, stack);
   } catch (err) {
@@ -169,7 +170,11 @@ async function deployPersistent(log: Log, config: TripwireConfig, yes: boolean):
         log,
         "persistent",
         yes,
-        { title: `Creating a DNS zone for ${config.domain}`, unchanged: null },
+        {
+          title: `Creating a DNS zone for ${config.domain}`,
+          unchanged: null,
+          live: { action: "build", stack: "persistent", usualSeconds: 5 * 60 },
+        },
         ["-target=aws_route53_zone.main"],
       );
     }
@@ -179,6 +184,7 @@ async function deployPersistent(log: Log, config: TripwireConfig, yes: boolean):
   await applyStack(log, "persistent", yes, {
     title: "Domain and HTTPS certificate",
     unchanged: "Domain and HTTPS certificate · unchanged",
+    live: { action: "build", stack: "persistent", estimate: "usually under a minute", usualSeconds: 5 * 60 },
   });
 }
 
@@ -189,11 +195,17 @@ interface DataPlan {
 }
 
 // Whether the stack is empty, and what data it starts with
-async function planData(log: Log, config: TripwireConfig, fresh: boolean): Promise<DataPlan> {
+async function planData(
+  log: Log,
+  config: TripwireConfig,
+  fresh: boolean,
+  setMessage: (text: string) => void,
+): Promise<DataPlan> {
   const bucket = stateBucketName(config.accountId, config.region);
   if (!(await bucketExists(log, bucket))) return { stackEmpty: true, summary: "new, empty" };
 
-  await tfInit(log, "stack");
+  await tfInit(log, "stack", () => setMessage(downloadingNote("Checking for saved data")));
+  setMessage("Checking for saved data");
   if (findResource(await tfState(log, "stack"), "aws_db_instance.main")) {
     return { stackEmpty: false, summary: "kept, the stack is running" };
   }
@@ -232,8 +244,8 @@ export async function deploy(options: DeployOptions): Promise<void> {
 
   await syncInfra(bundledInfraDir(), deploymentDir());
   await writeSettings(config);
-  const data = await step("Checking for saved data", () =>
-    planData(log, config, options.fresh ?? false),
+  const data = await step("Checking for saved data", (setMessage) =>
+    planData(log, config, options.fresh ?? false, setMessage),
   );
   if (data.restore) await writeSettings(config, data.restore);
 
@@ -264,13 +276,18 @@ export async function deploy(options: DeployOptions): Promise<void> {
   }
 
   const yes = options.yes ?? false;
-  await applyStack(log, "bootstrap", yes, { title: "Preparing your AWS account", unchanged: null });
+  await applyStack(log, "bootstrap", yes, {
+    title: "Preparing your AWS account",
+    unchanged: null,
+    live: { action: "build", stack: "bootstrap", estimate: "usually about a minute", usualSeconds: 5 * 60 },
+  });
   await deployPersistent(log, config, yes);
   await applyStack(log, "stack", yes, {
     title: data.stackEmpty ? "Building Laminar" : "Updating Laminar",
     unchanged: "Laminar · unchanged",
     live: {
       action: "build",
+      stack: "stack",
       ...(data.stackEmpty ? { estimate: "usually 8–10 minutes" } : {}),
       usualSeconds: 15 * 60,
     },
@@ -286,7 +303,6 @@ export async function deploy(options: DeployOptions): Promise<void> {
   p.note(
     [
       `Laminar  ${outputs.laminar_url}`,
-      `gRPC     ${outputs.laminar_grpc_endpoint}`,
       `Log      ${log.path}`,
     ].join("\n"),
     "Deployed",

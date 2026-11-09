@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { execa } from "execa";
 import { deploymentDir } from "./paths.js";
+import { terraformEnv } from "./pluginCache.js";
 
 // One log file per command run
 export class Log {
@@ -76,7 +77,7 @@ export async function runWithExitCode(
   const result = await execa(file, args, {
     cwd,
     reject: false,
-    env: { TF_IN_AUTOMATION: "1" },
+    env: { TF_IN_AUTOMATION: "1", ...(file === "terraform" ? terraformEnv() : {}) },
     stdout,
     stderr: ["pipe", toLog],
   });

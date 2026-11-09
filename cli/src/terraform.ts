@@ -43,10 +43,26 @@ export async function writeSettings(config: TripwireConfig, restore?: Restore): 
   }
 }
 
-export async function tfInit(log: Log, stack: StackName): Promise<void> {
+// onDownload is called once if init really downloads a provider (not from the cache)
+export async function tfInit(log: Log, stack: StackName, onDownload?: () => void): Promise<void> {
   const args = ["init", "-input=false", "-no-color"];
   if (stack !== "bootstrap") args.push("-backend-config=backend.hcl");
-  await run(log, "terraform", args, { cwd: stackDir(stack) });
+  let downloading = false;
+  const onLine = onDownload
+    ? (line: string) => {
+        if (!downloading && isDownloadLine(line)) {
+          downloading = true;
+          onDownload();
+        }
+        return line;
+      }
+    : undefined;
+  await run(log, "terraform", args, { cwd: stackDir(stack), onLine });
+}
+
+// "- Installing hashicorp/aws v6.71.0..." means a download; cache hits say "Using … from the shared cache"
+export function isDownloadLine(line: string): boolean {
+  return line.startsWith("- Installing ");
 }
 
 // Saves a plan to tfplan; true if it has changes
