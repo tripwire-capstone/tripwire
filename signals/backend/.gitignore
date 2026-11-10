@@ -1,0 +1,6 @@
+# Secrets: only .env.example is shared
+.env
+# Local Python
+.venv/
+__pycache__/
+.pytest_cache/

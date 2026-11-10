@@ -1,0 +1,64 @@
+# Tripwire backend skeleton: docker compose up --build
+#
+#   db         Postgres + pgvector. On its FIRST start (empty volume) it runs
+#              everything in migrations/ in name order. To apply a changed or new
+#              migration: docker compose down -v (deletes the data), then up again.
+#   seed       one project, one signal (+ v1), one cluster; runs once, then exits
+#   poller     Laminar -> traces, every 10 s
+#   runner     PLACEHOLDER: traces -> runs + some events, every 5 s
+#   clusterer  PLACEHOLDER: events -> embeddings + some cluster links, every 10 s
+
+x-backend: &backend
+  build: .
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql://tripwire:tripwire@db:5432/tripwire
+  restart: unless-stopped
+  depends_on:
+    seed:
+      condition: service_completed_successfully
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: tripwire
+      POSTGRES_PASSWORD: tripwire
+      POSTGRES_DB: tripwire
+    ports:
+      - "5434:5432"   # 5434 on your machine, so it doesn't clash with a local Postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tripwire -d tripwire"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  seed:
+    <<: *backend
+    command: python -m tripwire.seed
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  poller:
+    <<: *backend
+    command: python -m tripwire.poller
+    # Lets the container reach a Laminar running on this machine (self-hosted) at
+    # http://host.docker.internal:8000. Not needed for Laminar Cloud.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  runner:
+    <<: *backend
+    command: python -m tripwire.runner
+
+  clusterer:
+    <<: *backend
+    command: python -m tripwire.clusterer
+
+volumes:
+  pgdata:
