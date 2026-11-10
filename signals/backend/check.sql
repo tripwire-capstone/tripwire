@@ -5,6 +5,7 @@
 SELECT 'traces' AS table_name, count(*) FROM traces
 UNION ALL SELECT 'signal_runs', count(*) FROM signal_runs
 UNION ALL SELECT 'signal_events', count(*) FROM signal_events
+UNION ALL SELECT 'event_summaries', count(*) FROM event_summaries
 UNION ALL SELECT 'event_embeddings', count(*) FROM event_embeddings
 UNION ALL SELECT 'cluster_members', count(*) FROM cluster_members;
 
@@ -30,3 +31,7 @@ LEFT JOIN signal_events e ON e.run_id = r.id
 LEFT JOIN event_embeddings m ON m.event_id = e.id
 LEFT JOIN cluster_members cm ON cm.event_id = e.id
 GROUP BY s.id ORDER BY s.id;
+
+\echo '== Clusterer: summaries by status and error kind (pending + service = waiting on OpenAI)'
+SELECT status, error_kind, count(*), max(updated_at) AS latest
+FROM event_summaries GROUP BY 1, 2 ORDER BY 1, 2;
