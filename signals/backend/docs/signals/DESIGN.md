@@ -4,7 +4,9 @@
 signal runner and judge; when a decision changes, update this file in the same PR.*
 
 For the Clusters pair, `FOR_CLUSTERING_PAIR.md` (same folder) answers their questions in short, and
-`FOR_CLUSTERING_AGENTS.md` gives their coding assistants the details. Read with:
+`FOR_CLUSTERING_AGENTS.md` gives their coding assistants the details. The work is split in two
+halves, each with its own handoff: `HANDOFF_JOB_FLOW.md` (poller fan-out, runner, migration, API) and
+`HANDOFF_JUDGE.md` (LLM module, rendering, prompt, checks, templates). Read with:
 `../../CONTRACT.md` (services, tables, job flow, conventions) and `../clustering/DESIGN.md`.
 
 **Ground rule:** the schema is expected to change. Schema changes go in a new migration from the
@@ -85,4 +87,6 @@ Laminar ──► poller ──► traces ──┬─► signal_runs (pending) 
 - **Migration:** several events per run (drop `UNIQUE (run_id)`, add `finding_index`) and
   `signal_runs.not_before`.
 - **Gold sets:** proving the judge works, possibly from tau-traffic's answer key.
-- **Work split** within the Signals pair.
+- **Work split** within the Signals pair: proposed as job flow vs judge, meeting at
+  `judge(laminar, trace, version) -> JudgeResult` (types in `HANDOFF_JOB_FLOW.md`, A2); who takes which
+  half is still to decide.
