@@ -36,7 +36,12 @@ def run_pool(conn, min_events=MIN_EVENTS, min_conversations=MIN_CONVERSATIONS):
 # ------------------------------------------------------------------ group_vectors (no database)
 
 def test_group_vectors_merges_exactly_at_threshold():
-    assert group_vectors(vectors_all_apart(3, 0.30), THRESHOLD) == [[0, 1, 2]]
+    # Vectors meant to be 0.30 apart compute as 0.29999999999999993 on one machine and
+    # 0.30000000000000004 on another (found running the tests in the Linux image), so "exactly at
+    # the threshold" can't be tested at 0.30. Vectors at right angles are exactly 1.0 apart on
+    # every machine, so the inclusive rule is tested with a threshold of 1.0.
+    at_right_angles = [base_vector(), vector_at(1.0, axis=1), vector_at(1.0, axis=2)]
+    assert group_vectors(at_right_angles, threshold=1.0) == [[0, 1, 2]]
 
 
 def test_group_vectors_keeps_vectors_just_past_threshold_apart():
