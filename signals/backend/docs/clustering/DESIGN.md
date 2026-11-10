@@ -28,7 +28,10 @@ One `clusterer` process (exactly one copy, per CONTRACT.md). Each pass, in order
 
 1. **Prepare** up to `CLUSTER_PREPARE_BATCH` new events (default 50): summarize, then embed the
    summary. Live events before backfill ones (#14). Each event commits as soon as each step finishes.
-2. **Assign** newly embedded events to existing clusters ("decide then apply", below).
+2. **Assign** every pool event to existing clusters ("decide then apply", below). Checked every pass,
+   not only when newly embedded, so an event that was too far can join once a center moves closer.
+   This includes pool events older than `CLUSTER_POOL_WINDOW_DAYS`: they can't form new clusters (Q9)
+   but can still join one.
 3. **Group the pool** per Signal into new clusters.
 4. **Name** new clusters.
 5. **Update cluster centers.**
