@@ -35,7 +35,7 @@ Decision numbers (#n) refer to "Tripwire Backend: Design Decisions to Settle".
 |---|---|---|---|---|
 | `poller` | Polls Laminar's SQL API for finished traces | **exactly 1** | Laminar; `signals`, `signal_versions` (if it does fan-out) | `traces`, `signal_runs` (if it does fan-out) |
 | `runner` | Claims run jobs, calls the judge, records results | 1 or more | `traces`, `signal_versions`, Laminar (spans) | `signal_runs`, `signal_events` |
-| `clusterer` | Embeds new events, assigns/creates clusters, names them | **exactly 1** | `signal_events` | `event_embeddings`, `clusters`, `cluster_members` |
+| `clusterer` | Summarizes and embeds new events, assigns/creates clusters, names them | **exactly 1** | `signal_events`, `signal_versions`, `signal_runs`, `traces` | `event_summaries`, `event_embeddings`, `clusters`, `cluster_members` |
 | `api` | Serves the frontend | 1 or more | everything | `signals`, `signal_versions` (create/edit) |
 
 Rules for every service:
@@ -61,6 +61,7 @@ migration from the owner, announced to the team.
 | `signal_versions` | signals | saved edit of a signal (full definition) |
 | `signal_runs` | signals | (trace, signal version) to judge; **this is the job table** |
 | `signal_events` | signals | something a judge found |
+| `event_summaries` | clusters | event's clustering summary: status, errors, cost, prompt version |
 | `event_embeddings` | clusters | embedded event |
 | `clusters` | clusters | cluster (within one signal) |
 | `cluster_members` | clusters | event's place in a leaf cluster |
@@ -72,11 +73,14 @@ Rules the database enforces (each one has a test):
   over live traffic can't judge the same trace twice with the same version.
 - **An event matches its run:** composite foreign key on `(run_id, trace_id, signal_version_id)`.
 - **One event per run.**
-- **Every event has a non-blank `description`** whatever the user's schema. This is the text the
-  clusterer embeds. User-defined fields go in `payload`.
+- **Every event has a non-blank `description`** whatever the user's schema. User-defined fields go in
+  `payload`. The clusterer does **not** embed `description`: it embeds its own summary
+  (`event_summaries.summary`; `docs/clustering/DESIGN.md` Q1).
+- **A summary's state is consistent:** `done` has a non-blank summary; `failed` says why (bad output,
+  too long or refused), and a service error (timeout, rate limit, outage) never fails it.
 - **A `running` job always has a lease; a `failed` job always has an error.**
 - **Cluster membership needs an embedding;** embeddings are exactly 1536 numbers.
-- **Deleting a trace removes** its runs, events, embeddings and memberships (for retention later).
+- **Deleting a trace removes** its runs, events, summaries, embeddings and memberships (for retention later).
   Clusters themselves stay.
 
 Design notes:
