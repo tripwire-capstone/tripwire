@@ -124,10 +124,13 @@ def complete(model, messages, json_schema) -> LLMResult   # parsed output + inpu
 class LLMServiceError(Exception)    # timeout, rate limit, 5xx, outage, auth → wait and retry, no attempt used
 class LLMBadOutput(Exception)       # doesn't parse / doesn't match the schema → uses an attempt
 class LLMInputTooLong(Exception)    # context length exceeded → fail at once
+class LLMRefused(Exception)         # the model refused → fail at once
 FakeLLM                             # scripted outputs and each error, for tests
 ```
 
-- The three errors are the three your Q11 needs; the judge retries the same way (S7).
+- The first three errors are the three your Q11 needs; `LLMRefused` is an addition (a refusal won't
+  change on retry). Treat it like "input too long" if your summarizer never expects one. The judge retries
+  the same way (S7).
 - **Prices: OPEN.** The module may wrap an open-source library that also prices calls. `cost_usd` may be
   `None` for an unknown model; don't fail on it.
 - **Provider:** OpenAI for now (S16).
