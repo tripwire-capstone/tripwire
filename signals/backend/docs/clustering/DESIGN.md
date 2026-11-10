@@ -32,7 +32,11 @@ One `clusterer` process (exactly one copy, per CONTRACT.md). Each pass, in order
    not only when newly embedded, so an event that was too far can join once a center moves closer.
    This includes pool events older than `CLUSTER_POOL_WINDOW_DAYS`: they can't form new clusters (Q9)
    but can still join one.
-3. **Group the pool** per Signal into new clusters.
+3. **Group the pool** per Signal into new clusters. Average linkage uses SciPy's standard
+   implementation (replacing the prototype's hand-written one, since real pools can reach thousands
+   of events). A new cluster gets its center (the average of its members) when it's created, so the
+   next pass's assign can use it; step 5 updates centers after joins. One transaction per Signal: an
+   error in one Signal is logged and the others carry on.
 4. **Name** new clusters.
 5. **Update cluster centers.**
 
