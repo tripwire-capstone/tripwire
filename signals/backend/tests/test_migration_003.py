@@ -86,3 +86,15 @@ def test_blank_critical_guidance_is_rejected(conn):
     with pytest.raises(psycopg.errors.CheckViolation):
         conn.execute("UPDATE signal_versions SET critical_guidance = '' WHERE id = %s",
                      (version_id,))
+
+def test_evidence_labels_default_to_empty_and_store_a_list(conn):
+    run = make_run(conn)
+    add_event(conn, run, 0)
+    run_id, trace_id, version_id = run
+    conn.execute(
+        """INSERT INTO signal_events (run_id, trace_id, signal_version_id, finding_index,
+                                      severity, judge_input, evidence_labels)
+           VALUES (%s, %s, %s, 1, 'warning', 'input', %s)""",
+        (run_id, trace_id, version_id, ["S3", "S4"]))
+    assert conn.execute("SELECT evidence_labels FROM signal_events ORDER BY finding_index").fetchall() == \
+        [([],), (["S3", "S4"],)]

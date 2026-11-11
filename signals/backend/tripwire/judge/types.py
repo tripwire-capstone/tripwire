@@ -4,7 +4,7 @@ Changing a field here changes both halves: do it in its own small PR that both S
 members approve (HANDOFF_JOB_FLOW.md, A2).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
@@ -56,6 +56,7 @@ class Finding:
     severity: Severity
     span_ids: list[str]             # real Laminar span IDs (evidence)
     fields: dict                    # the signal's own fields -> signal_events.payload
+    evidence_labels: list[str] = field(default_factory=list)   # the same evidence as labels in judge_input, e.g. ["S3"]
 
 
 @dataclass(frozen=True)

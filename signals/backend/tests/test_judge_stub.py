@@ -52,3 +52,12 @@ def test_unknown_cost_stays_unknown():
 
 def test_judge_error_without_usage_defaults_to_zero():
     assert JudgeError("x", retryable=False, uses_attempt=False).usage == Usage()
+
+def test_stub_findings_carry_evidence_labels():
+    labelled = [f for n in range(50) for f in judge(None, trace(n), VERSION).findings]
+    assert labelled and all(f.evidence_labels for f in labelled)
+
+
+def test_finding_without_labels_defaults_to_empty():
+    from tripwire.judge.types import Finding
+    assert Finding(severity="info", span_ids=[], fields={}).evidence_labels == []

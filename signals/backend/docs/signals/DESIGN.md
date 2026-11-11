@@ -56,6 +56,7 @@ Laminar ──► poller ──► traces ──┬─► signal_runs (pending) 
 | S22 | **`judge_input`** = the rendered trace as the model read it: the agent's system prompt, up to 5 earlier turns, and the current turn with span labels, tool calls, results and `ERROR` markers. Not the judge's rules, the signal block, the schema or the answer. Stored on every event of a run (same text); on `signal_runs.rendered_trace` for failed runs; nowhere for found-nothing runs. Format changes are announced to the Clusters pair before merging. | The clusterer's summarizer and the UI's event panel both need "what the judge saw". |
 | S23 | **Time limits inside `judge()`:** two Laminar queries at 10 s each on a judge-only client with no retries, one model call at 60 s with the OpenAI SDK's retries off, one repair at 60 s: about 140 s worst case. Timeouts become `JudgeError`s that don't use an attempt; only the runner retries. The runner refuses to start unless the lease is at least 2 × fetch + 2 × model + 30 s. | With default client settings one call could outlast the 180 s lease, and the run would be judged and paid for twice. |
 | S24 | **Work split:** job flow (poller fan-out, runner, migrations, API) and judge (LLM module, rendering, prompt, checks, templates), meeting at `judge(laminar, trace, version) -> JudgeResult` in `tripwire/judge/types.py`. | The halves share no files; the stub judge lets the runner be built without an LLM. |
+| S25 | **Evidence labels on events.** Each event stores the span labels its finding cited (`evidence_labels`, e.g. `["S3"]`), as they appear in `judge_input`, next to the same spans as real Laminar `span_ids`, in the same order. | Events of one run share `judge_input`; the labels show which part of it belongs to which event. |
 
 ## Settings (env vars; names proposed)
 
@@ -77,7 +78,7 @@ Laminar ──► poller ──► traces ──┬─► signal_runs (pending) 
 
 | Table | Columns | Notes |
 |---|---|---|
-| `signal_events` | `id`, `run_id`, `finding_index`, `trace_id`, `signal_version_id`, `created_at`, `severity`, `payload`, `judge_input`, `description` | Up to 5 rows per run, numbered by `finding_index` (S6). `description` is nullable (S17). `judge_input` is the rendered trace (S22). |
+| `signal_events` | `id`, `run_id`, `finding_index`, `trace_id`, `signal_version_id`, `created_at`, `severity`, `payload`, `judge_input`, `evidence_labels`, `span_ids`, `description` | Up to 5 rows per run, numbered by `finding_index` (S6). `description` is nullable (S17). `judge_input` is the rendered trace (S22). `evidence_labels` point into `judge_input` (S25). |
 | `signal_versions` | `signal_id`, `instruction`, `output_schema` | Current version = highest `version_number`. `output_schema` is a field list (S20). |
 | `signal_runs` | `source` (`live` / `backfill`) | |
 | `traces` | `session_id` | NULL when the app sends none. |
