@@ -21,7 +21,9 @@ function planOf(addresses: string[]): Plan {
   };
 }
 
-function start(address: string): TerraformEvent {
+// Returns the "apply_start" kind of event specifically (not any TerraformEvent), so complete() can
+// copy it and TypeScript knows the copy still has address, resourceType and action.
+function start(address: string): Extract<TerraformEvent, { type: "apply_start" }> {
   return { type: "apply_start", message: "", address, resourceType: address.split(".")[0], action: "create" };
 }
 
