@@ -57,6 +57,10 @@ Laminar ──► poller ──► traces ──┬─► signal_runs (pending) 
 | S23 | **Time limits inside `judge()`:** two Laminar queries at 10 s each on a judge-only client with no retries, one model call at 60 s with the OpenAI SDK's retries off, one repair at 60 s: about 140 s worst case. Timeouts become `JudgeError`s that don't use an attempt; only the runner retries. The runner refuses to start unless the lease is at least 2 × fetch + 2 × model + 30 s. | With default client settings one call could outlast the 180 s lease, and the run would be judged and paid for twice. |
 | S24 | **Work split:** job flow (poller fan-out, runner, migrations, API) and judge (LLM module, rendering, prompt, checks, templates), meeting at `judge(laminar, trace, version) -> JudgeResult` in `tripwire/judge/types.py`. | The halves share no files; the stub judge lets the runner be built without an LLM. |
 | S25 | **Evidence labels on events.** Each event stores the span labels its finding cited (`evidence_labels`, e.g. `["S3"]`), as they appear in `judge_input`, next to the same spans as real Laminar `span_ids`, in the same order. | Events of one run share `judge_input`; the labels show which part of it belongs to which event. |
+| S26 | **API, first part:** `POST /api/signals` (signal + version 1), `GET /api/signals/{id}` (signal + current version), `PUT` (edit), `PATCH` (`{"active": …}`), `GET /api/health`. JSON uses the database's field names, and every response is an explicit model (an allow-list of fields), never a raw row. Lists, events, runs and test-on-trace come next. | Hiding names protects nothing; the allow-list stops a sensitive column from leaking. |
+| S27 | **Valid definitions:** non-blank unique name (409 on a duplicate) and instruction; at least one field, field rules as in S20; filters `matches()` understands; optional non-blank critical guidance; model defaults to `JUDGE_DEFAULT_MODEL`. One check lists every problem in a 422. | Create, edit and test-on-trace share one check; the caller fixes everything at once. |
+| S28 | **Edits:** a new version only when the definition (instruction, fields, filters, critical guidance, model) changed; a rename changes only the signal. The signal row is locked during an edit so two edits can't both create the same version number. | A version number always means something changed (as in Laminar). |
+| S29 | **Projects and templates:** every signal belongs to one project; the API uses the only row in `projects` (503 if none). Templates are code shared by every project; creating from one makes an independent copy, and `signals.template` records which. Each project gets a Failure Detector from its template once templates exist. | Edits in one project can't affect another; the column drives the preset vs custom badge. |
 
 ## Settings (env vars; names proposed)
 
@@ -93,3 +97,5 @@ Laminar ──► poller ──► traces ──┬─► signal_runs (pending) 
 - **Shared LLM module** with the Clusters pair: structured output, token counts, four error types
   (service problem, bad output, input too long, refused), a test fake. Interface to agree with them.
 - **Gold sets:** proving the judge works, possibly from tau-traffic's answer key.
+- **API, second part:** signals list, events and runs lists, test-on-trace; checking `template`
+  against the real templates once they exist.

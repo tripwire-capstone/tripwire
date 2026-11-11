@@ -70,5 +70,10 @@ services:
       retries: 3
       start_period: 60s
 
+  api:
+    <<: *backend
+    command: uvicorn tripwire.api.app:app --host 0.0.0.0 --port 8080
+    ports:
+      - "8080:8080"
 volumes:
   pgdata:
