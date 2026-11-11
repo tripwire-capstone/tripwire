@@ -1,35 +1,61 @@
-"""PLACEHOLDER signal runner: python -m tripwire.runner
+"""Signal runner: python -m tripwire.runner
 
-Settings (env or .env): DATABASE_URL; RUNNER_INTERVAL_SECONDS (default 5);
-STUB_EVENT_RATE (share of traces that get an event, default 0.5).
+Worker threads claim pending runs, judge them and record the outcome; the main thread
+sweeps runs that can never finish. Stops cleanly on Ctrl-C or SIGTERM: threads finish
+their current run, and any run they can't finish is picked up again when its lease expires.
+
+Settings (env or .env): DATABASE_URL, LMNR_PROJECT_API_KEY, and the RUNNER_* / JUDGE_*
+variables in settings.py.
 """
 
 import logging
 import os
+import signal
+import threading
 
 import psycopg
 from dotenv import load_dotenv
 
-from ..placeholder import run_forever
-from .run import run_step
+from . import jobs
+from .settings import Settings
+from .worker import worker_loop
 
 log = logging.getLogger("runner")
 
 
 def main():
     load_dotenv()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(threadName)s %(message)s")
+    settings = Settings.from_env()
+    settings.check()
     database_url = os.environ["DATABASE_URL"]
-    rate = float(os.environ.get("STUB_EVENT_RATE", 0.5))
+    api_key = os.environ["LMNR_PROJECT_API_KEY"]
 
-    def step():
-        with psycopg.connect(database_url) as conn:
-            runs, events = run_step(conn, rate)
-        if runs:
-            log.info("placeholder judge: %d runs, %d events", runs, events)
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
 
-    run_forever(step, float(os.environ.get("RUNNER_INTERVAL_SECONDS", 5)), "runner")
+    threads = [threading.Thread(target=worker_loop, name=f"worker-{i}",
+                                args=(f"worker-{i}", database_url, api_key, settings, stop))
+               for i in range(settings.threads)]
+    for t in threads:
+        t.start()
+    log.info("runner started: %d threads, lease %ds", settings.threads, settings.lease_seconds)
+
+    while not stop.wait(settings.sweep_seconds):
+        try:
+            with psycopg.connect(database_url, autocommit=True) as conn:
+                expired, gave_up = jobs.sweep(conn, settings)
+            if expired or gave_up:
+                log.info("sweep: %d expired on their last attempt, %d given up", expired, gave_up)
+        except Exception:
+            log.exception("sweep failed, will retry")
+
+    for t in threads:
+        t.join(timeout=settings.lease_seconds)
+    log.info("stopped")
 
 
 if __name__ == "__main__":
     main()
+    
