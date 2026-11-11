@@ -39,21 +39,20 @@ ORDER BY start_time, span_id
 
 def fetch_spans(laminar, trace_id: str, started_at: datetime) -> list[dict]:
     """Return the current turn's raw spans in start-time order."""
-    if started_at.utcoffset() is None:
-        raise ValueError("Trace start time must include a timezone")
+    spans = laminar.query(SPANS_SQL, _span_parameters(trace_id, started_at))
+    return _require_spans(trace_id, spans)
 
-    lower_bound = started_at.astimezone(timezone.utc) - timedelta(hours=1)
-    spans = laminar.query(
+
+async def fetch_spans_async(
+    laminar, trace_id: str, started_at: datetime, *, deadline: float
+) -> list[dict]:
+    """Fetch the current turn's spans within the caller's deadline."""
+    spans = await laminar.query(
         SPANS_SQL,
-        {
-            "trace_id": trace_id,
-            "since": lower_bound.strftime("%Y-%m-%d %H:%M:%S.%f"),
-        },
+        _span_parameters(trace_id, started_at),
+        deadline=deadline,
     )
-    if not spans:
-        raise LookupError(f"No spans found for Laminar trace {trace_id}")
-
-    return spans
+    return _require_spans(trace_id, spans)
 
 
 def fetch_earlier_turns(
@@ -62,24 +61,74 @@ def fetch_earlier_turns(
     """Return up to five earlier root inputs and outputs, oldest first."""
     if not session_id:
         return []
-    if started_at.utcoffset() is None:
-        raise ValueError("Trace start time must include a timezone")
 
-    before = started_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
-    traces = laminar.query(EARLIER_TRACES_SQL, {"session_id": session_id, "before": before})
+    traces = laminar.query(
+        EARLIER_TRACES_SQL, _earlier_trace_parameters(session_id, started_at)
+    )
     if not traces:
         return []
 
+    roots = laminar.query(EARLIER_ROOTS_SQL, _earlier_root_parameters(traces))
+    return _assemble_earlier_turns(traces, roots)
+
+
+async def fetch_earlier_turns_async(
+    laminar, session_id: str | None, started_at: datetime, *, deadline: float
+) -> list[dict]:
+    """Fetch earlier turns using one deadline for the trace and root queries."""
+    if not session_id:
+        return []
+
+    traces = await laminar.query(
+        EARLIER_TRACES_SQL,
+        _earlier_trace_parameters(session_id, started_at),
+        deadline=deadline,
+    )
+    if not traces:
+        return []
+
+    roots = await laminar.query(
+        EARLIER_ROOTS_SQL, _earlier_root_parameters(traces), deadline=deadline
+    )
+    return _assemble_earlier_turns(traces, roots)
+
+
+def _utc_start(started_at: datetime) -> datetime:
+    if started_at.utcoffset() is None:
+        raise ValueError("Trace start time must include a timezone")
+    return started_at.astimezone(timezone.utc)
+
+
+def _span_parameters(trace_id: str, started_at: datetime) -> dict:
+    lower_bound = _utc_start(started_at) - timedelta(hours=1)
+    return {
+        "trace_id": trace_id,
+        "since": lower_bound.strftime("%Y-%m-%d %H:%M:%S.%f"),
+    }
+
+
+def _require_spans(trace_id: str, spans: list[dict]) -> list[dict]:
+    if not spans:
+        raise LookupError(f"No spans found for Laminar trace {trace_id}")
+    return spans
+
+
+def _earlier_trace_parameters(session_id: str, started_at: datetime) -> dict:
+    before = _utc_start(started_at).strftime("%Y-%m-%d %H:%M:%S.%f")
+    return {"session_id": session_id, "before": before}
+
+
+def _earlier_root_parameters(traces: list[dict]) -> dict:
     lower_bound = min(parse_laminar_time(trace["started_utc"]) for trace in traces)
     lower_bound -= timedelta(hours=1)
-    roots = laminar.query(
-        EARLIER_ROOTS_SQL,
-        {
-            "trace_ids": [trace["trace_id"] for trace in traces],
-            "root_parent_id": ROOT_PARENT_ID,
-            "since": lower_bound.strftime("%Y-%m-%d %H:%M:%S.%f"),
-        },
-    )
+    return {
+        "trace_ids": [trace["trace_id"] for trace in traces],
+        "root_parent_id": ROOT_PARENT_ID,
+        "since": lower_bound.strftime("%Y-%m-%d %H:%M:%S.%f"),
+    }
+
+
+def _assemble_earlier_turns(traces: list[dict], roots: list[dict]) -> list[dict]:
     roots_by_id = {root["trace_id"]: root for root in roots}
     return [
         {"input": root["input"], "output": root["output"]}

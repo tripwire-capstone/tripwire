@@ -1,5 +1,6 @@
 """Small client for Laminar's SQL API (POST /v1/sql/query, SELECT only)."""
 
+import asyncio
 import time
 
 import httpx
@@ -43,6 +44,39 @@ class LaminarSQL:
 
     def close(self):
         self._client.close()
+
+
+class JudgeLaminarSQL:
+    """Laminar SQL client with caller-supplied deadlines and no retries."""
+
+    def __init__(self, api_key, api_url, *, transport=None):
+        self.url = f"{api_url.rstrip('/')}/v1/sql/query"
+        self._client = httpx.AsyncClient(
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=None,  # The caller's deadline bounds the HTTP request.
+            transport=transport,
+        )
+
+    async def query(self, sql, parameters=None, *, deadline: float):
+        """Run one SELECT by an absolute deadline from the event loop's clock."""
+        if deadline <= asyncio.get_running_loop().time():
+            raise TimeoutError("Laminar query deadline expired")
+
+        async with asyncio.timeout_at(deadline):
+            try:
+                response = await self._client.post(
+                    self.url, json={"query": sql, "parameters": parameters or {}}
+                )
+            except httpx.TransportError as e:
+                raise LaminarError(f"can't reach Laminar at {self.url}: {e}") from e
+            if response.status_code != 200:
+                raise LaminarError(
+                    f"HTTP {response.status_code}: {_error_text(response)}"
+                )
+            return response.json()["data"]
+
+    async def aclose(self):
+        await self._client.aclose()
 
 
 def _error_text(response):

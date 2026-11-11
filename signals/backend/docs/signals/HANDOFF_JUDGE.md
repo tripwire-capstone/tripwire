@@ -56,11 +56,13 @@ class LLMResult:
     output_tokens: int
     cost_usd: float | None       # None when the price is unknown
 
-def complete(model: str, messages: list[dict], json_schema: dict, *, timeout: float = 60) -> LLMResult: ...
+def complete(model: str, messages: list[dict], json_schema: dict, *,
+             timeout: float = 60, max_output_tokens: int = 4000) -> LLMResult: ...
 
 class LLMServiceError(Exception):   # timeout, connection, 429, 5xx, auth → caller waits, no attempt used
     retry_after: float | None
-class LLMBadOutput(Exception):      # doesn't parse / doesn't match the schema → uses an attempt
+class LLMBadOutput(Exception):      # incomplete or invalid structured output
+    finish_reason: str | None       # "length" identifies a cutoff for S19
 class LLMInputTooLong(Exception):   # context length exceeded → fail at once
 class LLMRefused(Exception):        # the model refused (strict-mode `refusal`) → fail at once
 
@@ -72,6 +74,7 @@ class FakeLLM: ...                  # scripted LLMResults and each exception, fo
   context-length error → `LLMInputTooLong`; a `refusal` → `LLMRefused`; a cut-off response or parse
   failure → `LLMBadOutput`). Read token counts, including cached tokens, from the response's usage.
 - `LLMRefused` is an addition to what the Clusters pair asked for; tell them when you post the shape.
+- Errors carry any usage reported for the failed request (S18).
 - **Prices: OPEN (Q23).** The team may use an open-source library for model calls and pricing. Until
   decided, return `cost_usd = None` or use a small temporary price dict clearly marked as such. Don't
   build a pricing system.
@@ -146,15 +149,16 @@ fixtures as examples) before building. Starting point from the design session:
   evidence and count it in `dropped_findings`; keep the valid labels in `Finding.evidence_labels` and map
   them, in the same order, to real span IDs for `Finding.span_ids`;
 - more than `JUDGE_MAX_FINDINGS` (5): keep the 5 most severe;
-- `LLMBadOutput` → **one repair retry** (resend with the error message appended); still bad →
-  `JudgeError(retryable=True, uses_attempt=True)`.
+- `LLMBadOutput` with `finish_reason = "length"` on the first call → **one repair retry** with the
+  same messages and 8,000 output tokens instead of 4,000 (S19). Any other bad output, or bad output
+  on the repair call, raises `JudgeError(retryable=True, uses_attempt=True)`.
 
 **Mapping errors to `JudgeError`** (the runner relies on this exactly):
 
 | From | `retryable` | `uses_attempt` |
 |---|---|---|
 | `LLMServiceError`, or Laminar unreachable | true | false |
-| `LLMBadOutput` after the repair retry | true | true |
+| `LLMBadOutput` other than the first cutoff | true | true |
 | `LLMRefused`, `LLMInputTooLong` | false | – (pass `rendered_trace`) |
 
 ## B5: `judge.py` and templates (SETTLED for Friday: Failure and Friction)
