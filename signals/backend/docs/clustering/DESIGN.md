@@ -52,10 +52,11 @@ Then sleep `CLUSTERER_INTERVAL_SECONDS` (default 10).
   in memory is assign → centers (if assign fails, step 5 has nothing to do).
 - **Autocommit connection**, opened fresh each pass, so each step's save commits on its own and a
   dropped connection heals next pass.
-- **`CLUSTERER_MODE`:** `placeholder` (default, the skeleton's fixed embeddings) or `real` (steps 1-5).
-  Until the prepare half's `prepare_events()` lands, real mode's step 1 is a do-nothing stand-in
-  (`prepare_stand_in()`), so real mode only clusters events that already have embeddings. When it lands:
-  call it from the stand-in and make `real` the default.
+- **`CLUSTERER_MODE`:** `real` (default, steps 1-5; needs `OPENAI_API_KEY`) or `placeholder` (the
+  skeleton's fixed embeddings, no OpenAI). Step 1 is the prepare half's `Preparer.prepare_events`, built
+  once in `__main__.py` and passed as `run_pass(..., prepare=...)`; `prepare_stand_in()` remains for tests.
+  Switching an existing database from placeholder to real: `docker compose down -v` (placeholder vectors
+  are all identical and would be clustered together).
 - **Settings** are read and checked once at startup (`settings.py`, the only place defaults live;
   `.env.example` matches, checked by a test). A bad value stops the clusterer with a message, which on
   ECS shows as an unhealthy service with the message in the logs.
@@ -110,7 +111,8 @@ responses.
 
 | Variable | Default | Decision |
 |---|---|---|
-| `CLUSTERER_MODE` | `placeholder` (`real` once the prepare half lands) | Running the loop |
+| `CLUSTERER_MODE` | `real` (`placeholder` = no OpenAI) | Running the loop |
+| `OPENAI_API_KEY` | none; required in real mode | Summarizer + embedder |
 | `CLUSTERER_INTERVAL_SECONDS` | 10 | Q13 |
 | `CLUSTER_PREPARE_BATCH` | 50 | Q13 |
 | `CLUSTER_ASSIGN_THRESHOLD` | 0.30 (temporary until calibrated) | Q7, Q14 |
@@ -131,7 +133,7 @@ Code: `tripwire/clusterer/summarize.py`, `llm_client.py`, `prompts/`. Full reaso
 
 - **Input** (`load_event` + `build_messages`): the instruction of the Signal version that judged *this*
   event (not the latest); Signal name and field descriptions; `severity`, `payload`, and `description` /
-  evidence labels only if present; `judge_input` unchanged. The judge's `analysis` is left out (it covers
+  evidence labels (`signal_events.evidence_labels`, Signals S25) only if present; `judge_input` unchanged. The judge's `analysis` is left out (it covers
   every finding of a run). Order: system prompt, then `<tripwire_trace>`, `<tripwire_signal>`, and this
   event's `<tripwire_finding>` **last** (focus; siblings share the trace prefix). Tags have unusual names;
   `judge_input` is not escaped. Prompt injection via traces: post-MVP, together with the Signals pair.
@@ -144,11 +146,29 @@ Code: `tripwire/clusterer/summarize.py`, `llm_client.py`, `prompts/`. Full reaso
 - **After each call** (`decide`, pure; `save`, one upsert): good → `done`; blank field or bad output →
   retry after 1 min, `failed` on the 3rd attempt; too long / refused → `failed` at once; service error →
   `pending`, no attempt used, retry after 30 s (or OpenAI's `retry-after` if longer). Tokens and cost add up
-  over every paid call. **Our own bugs are not caught** (fail loudly); `prepare_events` (PR 4) must catch
-  per event, log, and skip that event until restart, so one bad event can't block the queue or re-pay.
+  over every paid call. **Our own bugs are not caught here** (fail loudly); `prepare_events` handles them
+  per event (below).
 - **LLM client:** a stand-in shaped like the Signals pair's proposed `tripwire/llm/`; SDK retries off (one
   call = one paid request); OpenAI errors become `LLMServiceError` / `LLMBadOutput` / `LLMInputTooLong` /
   `LLMRefused`; anything else (wrong key, bad request) raises as-is. Prompt caching left at OpenAI's default.
+
+## Prepare step (PR 3 + 4, decided Nov 11)
+
+Code: `tripwire/clusterer/prepare.py`, `embed.py`. Full reasoning: Design Notes Q21.
+
+- **Order:** live before backfill, then oldest first. Needs a summary = no row, or `pending` with its wait
+  over. Needs a vector = `done` without an embedding. Summarize first, then embed, so an event can be
+  finished in one pass.
+- **Stops starting summaries** after 60 s (passes stay under `--alive`'s 3 minutes during a backlog) or
+  after a service error (the OpenAI key and its rate limits are shared with the judge).
+- **Our own bugs:** caught per event, logged with the traceback, and saved as `failed` with error_kind
+  `crashed` and the error message (migration 004; suggested by the grouping side, Nov 11). The event then
+  counts as finished: no endless "stalled" warning, no paid retries after a restart, and the re-queue SQL
+  brings it back once fixed. A bug hitting every event trips the health check's "last N summaries all
+  failed" rule. A **database outage** (connection errors only) is not a crash: it ends the step and the loop
+  retries next pass. If even saving the crash fails, that event is skipped in memory until restart.
+- **Embedder:** `text-embedding-3-small`, `summary` only, one call per batch, no failure bookkeeping (a
+  failed call is retried next pass), raises on a vector that isn't 1536 numbers, no cost tracking (MVP).
 
 ## The seam between the two halves
 
@@ -157,8 +177,8 @@ The work is split at `event_embeddings`. See `HANDOFF_PREPARE.md` and `HANDOFF_G
 | | Prepare half | Grouping half |
 |---|---|---|
 | Owns | `event_summaries` (new), writes `event_embeddings` | `clusters`, `cluster_members`, the loop, the health check |
-| Code (proposed) | `tripwire/clusterer/summarize.py`, `embed.py`, `prepare.py` | `tripwire/clusterer/assign.py`, `pool.py`, `naming.py`, `health.py`, `__main__.py` |
-| Interface | `prepare_events(conn, limit) -> counts`: does step 1 for up to `limit` events, live first, committing per event | The loop calls `prepare_events`, then steps 2–5 |
+| Code | `tripwire/clusterer/summarize.py`, `llm_client.py`, `embed.py`, `prepare.py` | `tripwire/clusterer/assign.py`, `pool.py`, `naming.py`, `health.py`, `__main__.py` |
+| Interface | `Preparer.prepare_events(conn, limit) -> counts` (non-zero counts only): summarizes then embeds up to `limit` events, live first, committing per event; stops starting summaries after 60 s or a service error | The loop calls `prepare_events`, then steps 2–5 |
 | Reads from the other half | nothing | `event_embeddings.embedding`; `event_summaries.summary` (naming), `.status` (health) |
 
 Both halves read `signal_events`, `signal_versions` (→ `signal_id`) and `traces` (`session_id`), which the
@@ -173,10 +193,8 @@ Signals pair owns.
 - Summarizer: growing waits (service: derive from `not_before − updated_at`, double, cap 5 min; bad output:
   1 min then 5 min), waits as settings, enforcing a summary length, comparing prompt versions (v1 vs bare
   rules vs no `cause`) on real judge output with park-traffic's answer key, prompt caching on/off.
-- `prepare_events`: end the pass on a service error (shared OpenAI key and rate limits with the judge); top
-  of PR 4's list if time allows.
 - Re-queue command (PR 5): until then, `UPDATE event_summaries SET status = 'pending', finished_at = NULL, attempts = 0
-  WHERE status = 'failed'`.
+  WHERE status = 'failed'` (add `AND error_kind = 'crashed'` to retry only crashes after a bug fix).
 
 ## Open items (outside the clusterer, or waiting on others)
 

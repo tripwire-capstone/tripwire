@@ -1,12 +1,12 @@
 # Tripwire backend (skeleton)
 
-A walking skeleton: every worker exists and data flows end to end. The poller is real; the
-signal runner and clusterer are **placeholders** that write real rows in the final shape, so
-they can be replaced one at a time without touching anything downstream.
+A walking skeleton: every worker exists and data flows end to end. The poller and clusterer are
+real; the signal runner is a **placeholder** that writes real rows in the final shape, so it can
+be replaced without touching anything downstream.
 
 ```
 Laminar ──► poller ──► traces ──► runner ──► signal_runs + signal_events ──► clusterer ──► event_embeddings + cluster_members
-          (real)                (placeholder)                              (placeholder)
+          (real)                (placeholder)                              (real)
 ```
 
 Day-to-day commands (run, traffic, database): [`docs/CHEATSHEET.md`](docs/CHEATSHEET.md).
@@ -19,7 +19,7 @@ Needs Docker and a Laminar project (Cloud or self-hosted) with some traces.
 
 ```bash
 cd signals/backend
-cp .env.example .env            # then fill in LMNR_PROJECT_API_KEY
+cp .env.example .env            # then fill in LMNR_PROJECT_API_KEY and OPENAI_API_KEY
 docker compose up --build
 ```
 
@@ -31,7 +31,7 @@ Compose starts, in order:
 | `seed` | One project, one signal ("User frustration") with v1, one cluster. Runs once, then exits. |
 | `poller` | Every 10 s: new finished traces from Laminar → `traces`. Looks back 24 h on its first poll. |
 | `runner` | **Placeholder.** Every 5 s: a `done` run per new trace; an event for about half of them. |
-| `clusterer` | **Placeholder.** Every 10 s: a fixed embedding per new event; about half get linked to the seeded cluster. |
+| `clusterer` | Every 10 s: summarizes and embeds new events (OpenAI; needs `OPENAI_API_KEY` in `.env`), then groups them into clusters. `CLUSTERER_MODE=placeholder` runs a no-OpenAI stand-in. |
 
 Send some traffic (park-traffic or tau-traffic) to the same Laminar project, then:
 

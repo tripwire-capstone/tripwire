@@ -8,7 +8,7 @@ import pytest
 from tripwire.clusterer.settings import DEFAULTS, SettingsError, load_settings
 
 ENV_EXAMPLE = Path(__file__).resolve().parents[1] / ".env.example"
-BASE = {"DATABASE_URL": "postgresql://example/tripwire"}
+BASE = {"DATABASE_URL": "postgresql://example/tripwire", "OPENAI_API_KEY": "test-key"}
 
 
 def settings_with(**overrides):
@@ -23,7 +23,7 @@ def problem_with(**overrides):
 
 def test_load_settings_uses_design_defaults_when_nothing_is_set():
     settings = load_settings(BASE)
-    assert settings.mode == "placeholder"
+    assert settings.mode == "real"
     assert settings.interval_seconds == 10
     assert settings.prepare_batch == 50
     assert settings.assign_threshold == 0.30
@@ -120,3 +120,19 @@ def test_load_settings_rejects_alive_window_shorter_than_one_pass():
     # --alive would fail between every two passes.
     message = problem_with(CLUSTER_HEALTH_ALIVE_MINUTES=0.1, CLUSTERER_INTERVAL_SECONDS=10)
     assert "CLUSTER_HEALTH_ALIVE_MINUTES must allow more time than one CLUSTERER_INTERVAL_SECONDS" in message
+
+
+def test_real_mode_requires_an_openai_key_and_says_how_to_opt_out():
+    message = str(pytest.raises(SettingsError, load_settings,
+                                {"DATABASE_URL": "postgresql://example/tripwire"}).value)
+    assert "OPENAI_API_KEY is required in real mode" in message
+    assert "CLUSTERER_MODE=placeholder" in message
+
+
+def test_placeholder_mode_runs_without_an_openai_key():
+    settings = load_settings({"DATABASE_URL": "postgresql://example/tripwire", "CLUSTERER_MODE": "placeholder"})
+    assert settings.mode == "placeholder" and settings.openai_api_key is None
+
+
+def test_the_openai_key_is_never_printed():
+    assert "test-key" not in repr(load_settings(BASE))

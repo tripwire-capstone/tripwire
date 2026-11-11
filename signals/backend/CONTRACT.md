@@ -77,7 +77,8 @@ Rules the database enforces (each one has a test):
   `payload`. The clusterer does **not** embed `description`: it embeds its own summary
   (`event_summaries.summary`; `docs/clustering/DESIGN.md` Q1).
 - **A summary's state is consistent:** `done` has a non-blank summary; `failed` says why (bad output,
-  too long or refused), and a service error (timeout, rate limit, outage) never fails it.
+  too long, refused, or `crashed`: a bug in our code), and a service error (timeout, rate limit, outage)
+  never fails it.
 - **A `running` job always has a lease; a `failed` job always has an error.**
 - **Cluster membership needs an embedding;** embeddings are exactly 1536 numbers.
 - **Deleting a trace removes** its runs, events, summaries, embeddings and memberships (for retention later).

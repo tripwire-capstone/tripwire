@@ -138,3 +138,14 @@ def test_deleting_the_trace_removes_the_summary(conn, event_id):
     insert(conn, event_id, **DONE)
     conn.execute("DELETE FROM traces")
     assert conn.execute("SELECT count(*) FROM event_summaries").fetchone()[0] == 0
+
+
+# ------------------------------------------------------------------ migration 004: crashes
+
+def test_a_crash_on_our_side_can_fail_an_event(conn, event_id):
+    insert(conn, event_id, **{**FAILED, "attempts": 1, "error_kind": "crashed",
+                              "last_error": "KeyError: 'reason'"})
+
+
+def test_a_crash_still_needs_its_error_message(conn, event_id):
+    rejected(conn, event_id, **{**FAILED, "error_kind": "crashed", "last_error": None})
