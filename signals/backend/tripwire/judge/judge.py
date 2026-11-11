@@ -12,6 +12,7 @@ from ..llm import LLMBadOutput, LLMError, LLMInputTooLong, LLMRefused, LLMServic
 from ..placeholder import picked
 from .check import check_findings
 from .fetch import fetch_earlier_turns_async, fetch_spans_async
+from .laminar import LaminarUnavailable
 from .prompt import build_judge_messages
 from .render import Rendered, render_trace
 from .schema import build_judge_schema
@@ -43,9 +44,10 @@ async def _prepare_judge_input(
             trace.started_at,
             deadline=clock() + fetch_timeout,
         )
-    except TimeoutError as exc:
+    except (TimeoutError, LaminarUnavailable) as exc:
+        detail = str(exc) or "query deadline expired"
         raise JudgeError(
-            "Timed out fetching the trace from Laminar",
+            f"Could not fetch the trace from Laminar: {detail}",
             retryable=True,
             uses_attempt=False,
         ) from exc
