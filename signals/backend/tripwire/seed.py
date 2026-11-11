@@ -30,7 +30,8 @@ KEY_PLACEHOLDER = b"not-encrypted-yet"
 SIGNAL_NAME = "User frustration"
 INSTRUCTION = ("Flag the trace if the user shows frustration with the assistant: repeating "
                "themselves, correcting it, complaining, or giving up.")
-OUTPUT_SCHEMA = {"type": "object", "properties": {"reason": {"type": "string"}}}
+OUTPUT_SCHEMA = [{"name": "reason", "type": "string",
+                  "description": "Why the user seems frustrated", "nullable": False}]
 
 
 def seed(conn, *, api_url, ui_url, key_hint, laminar_project_id=None):
