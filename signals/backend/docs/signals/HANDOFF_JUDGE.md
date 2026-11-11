@@ -143,7 +143,8 @@ fixtures as examples) before building. Starting point from the design session:
 
 **`check.py`:** (S11)
 - evidence labels must exist in `Rendered.labels`; drop unknown labels; drop a finding left with no valid
-  evidence and count it in `dropped_findings`; map labels to real span IDs for `Finding.span_ids`;
+  evidence and count it in `dropped_findings`; keep the valid labels in `Finding.evidence_labels` and map
+  them, in the same order, to real span IDs for `Finding.span_ids`;
 - more than `JUDGE_MAX_FINDINGS` (5): keep the 5 most severe;
 - `LLMBadOutput` → **one repair retry** (resend with the error message appended); still bad →
   `JudgeError(retryable=True, uses_attempt=True)`.

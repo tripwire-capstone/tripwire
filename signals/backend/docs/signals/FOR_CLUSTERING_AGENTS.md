@@ -22,9 +22,9 @@ If something here contradicts `../clustering/DESIGN.md`, don't silently pick one
 ### 1.1 One run can produce 0 to 5 events (SETTLED, S6)
 - One `signal_runs` row (one signal judging one trace) produces **zero to five** `signal_events` rows,
   one per distinct problem. Zero events = "found nothing".
-- **Not in the database yet.** The current schema still has `signal_events.run_id UNIQUE`. The Signals
-  pair's pending migration drops it and adds `finding_index smallint` with `UNIQUE (run_id, finding_index)`.
-  Until it merges, the placeholder runner still writes at most one event per run.
+- **In the database since migration 003:** `signal_events.run_id` is no longer unique; `finding_index`
+  (0–4) numbers a run's events, with `UNIQUE (run_id, finding_index)`. The placeholder runner still
+  writes at most one event per run; the real runner writes up to five.
 - **What this means for you:**
   - Key everything on `signal_events.id` (you already do). Never assume `run_id` or `trace_id` identifies
     one event.
@@ -49,33 +49,37 @@ If something here contradicts `../clustering/DESIGN.md`, don't silently pick one
 - Field names and descriptions are user-defined and live in `signal_versions.output_schema`. If the
   summarizer prompt should explain fields, read their descriptions from there.
 
-### 1.4 `description` (OPEN)
-- The Signals pair is discussing **dropping the built-in `description`** entirely. Human-readable text
-  would then be an ordinary field the signal defines inside `payload` (every template would include a
-  `description` field, as in Laminar).
-- If it goes, `signal_events.description` is dropped or made nullable in an announced migration.
+### 1.4 `description` (SETTLED, S17)
+- Findings have **no built-in text**. Human-readable text is an ordinary field the signal defines inside
+  `payload` (every template includes a `description` field, as in Laminar).
+- `signal_events.description` is **nullable** since migration 003 (not dropped); the real runner writes
+  NULL. The placeholder runner still fills it.
 - **What this means for you:** don't make `description` required input to the summarizer. Treat it as
   optional, and always pass `payload`. Keep the "build the summarizer input" code in one function.
 
-### 1.5 Evidence (OPEN for clustering use)
-- Each finding cites spans. They're stored in `signal_events.span_ids` as **real Laminar span IDs**.
-- `judge_input` labels spans with short labels (`[S1]`, `[S2]`, …), not Laminar IDs. **The labels are not
-  stored on the event**, so today the summarizer can't map `span_ids` to the spans in `judge_input`.
-- If pointing the summarizer at the cited spans would help, ask the Signals pair to also store the labels
-  (e.g. `evidence_labels text[]`). Don't parse span IDs out of `judge_input`.
+### 1.5 Evidence (SETTLED, S25)
+- Each finding cites spans, stored twice on its event:
+  - `signal_events.evidence_labels`: the labels as they appear in `judge_input` (e.g. `["S3", "S4"]`).
+    Use these to find the event's part of the rendered trace.
+  - `signal_events.span_ids`: the same spans as real Laminar span IDs, for links into Laminar.
+- Both lists are in the same order. Events written before this column existed have an empty list, and
+  so do the placeholder runner's events.
+- Two findings can cite the same span, so lead with the event's own `payload` and severity.
 
 ---
 
 ## 2. `judge_input`
 
-### 2.1 Contents (PROPOSED)
-- Direction: `judge_input` = **the rendered trace and earlier turns only**, as text. It does **not**
-  include the judge's system message or the signal's instruction (read the instruction from
-  `signal_versions.instruction`).
-- Every event from a run carries the same `judge_input` (see 1.1).
-- How spans are rendered is still being designed, so the exact text format will change. Read
-  `judge_input` as **opaque text**: pass it to the summarizer, don't parse its structure. The Signals pair
-  will tell you before its shape changes.
+### 2.1 Contents (SETTLED, S22)
+- `judge_input` = **the rendered trace as the model read it**: the agent's system prompt, up to 5 earlier
+  turns, and the current turn with span labels (`[S1]`, …), tool calls, results and `ERROR` markers. It
+  does **not** include the judge's system message, the signal's instruction (read it from
+  `signal_versions.instruction`), the output schema or the judge's answer.
+- Every event from a run carries the same `judge_input` (see 1.1); `evidence_labels` (1.5) say which
+  lines belong to which event.
+- How spans are rendered is still being tuned, so the exact text format can change. Read
+  `judge_input` as **opaque text** apart from finding the labels in it. The Signals pair will tell you
+  before its shape changes.
 
 ### 2.2 Earlier turns (SETTLED, S12)
 - Up to the **last 5 earlier turns** of the same conversation (`session_id`), each as a **user message +
@@ -88,10 +92,11 @@ If something here contradicts `../clustering/DESIGN.md`, don't silently pick one
   judge's model fails the run, so it never produces events. Any `judge_input` you see fit the judge's model.
 - Your rule "summarizer model's context window ≥ the judge's" still holds.
 
-### 2.4 Judge reasoning (PROPOSED, available later)
-- Every run stores the judge's `analysis` (its reasoning, written before the findings) on the **run**,
-  not the event. The column doesn't exist yet; it comes with the Signals pair's migration.
-- It's optional extra input for the summarizer's `cause` field. Don't depend on it until the column exists.
+### 2.4 Judge reasoning (SETTLED, available with the real runner)
+- Every run stores the judge's `analysis` (its reasoning, written before the findings) on the **run**
+  (`signal_runs.analysis`, since migration 003), not the event.
+- It's optional extra input for the summarizer's `cause` field. It's NULL for runs the placeholder
+  runner finished.
 
 ---
 
@@ -143,14 +148,15 @@ FakeLLM                             # scripted outputs and each error, for tests
 
 | Table.column | Status | Change |
 |---|---|---|
-| `signal_events.run_id` | SETTLED, migration pending | No longer unique; several events per run |
-| `signal_events.finding_index` | SETTLED, migration pending | New, 0–4, unique per run |
-| `signal_events.description` | OPEN | May be dropped or made nullable |
-| `signal_events.judge_input` | PROPOSED | Rendered trace + earlier turns only; text format will change; read as opaque |
-| `signal_events.span_ids` | SETTLED | Real Laminar span IDs; not mappable to labels in `judge_input` |
+| `signal_events.run_id` | SETTLED, migration 003 | No longer unique; several events per run |
+| `signal_events.finding_index` | SETTLED, migration 003 | New, 0–4, unique per run |
+| `signal_events.description` | SETTLED, migration 003 | Nullable; the real runner writes NULL |
+| `signal_events.judge_input` | SETTLED | The rendered trace; text format can change; read as opaque apart from labels |
+| `signal_events.evidence_labels` | SETTLED, migration 004 | New: the cited labels as they appear in `judge_input` |
+| `signal_events.span_ids` | SETTLED | Real Laminar span IDs, same order as `evidence_labels`; for links into Laminar |
 | `signal_events.payload` | SETTLED | Flat signal fields; nullable values allowed |
 | `signal_events.severity`, `created_at`, `trace_id`, `signal_version_id` | SETTLED | Unchanged |
-| `signal_runs.analysis` | PROPOSED, migration pending | New: the judge's reasoning, on the run |
+| `signal_runs.analysis` | SETTLED, migration 003 | New: the judge's reasoning, on the run |
 | `signal_runs.source` | SETTLED | Unchanged (`live` / `backfill`) |
 | `signal_versions.signal_id`, `instruction`, `output_schema` | SETTLED | Unchanged |
 | `traces.session_id` | SETTLED | Unchanged; NULL when the app sends none |
