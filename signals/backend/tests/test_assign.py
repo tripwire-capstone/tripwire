@@ -38,7 +38,7 @@ def test_assign_pool_joins_event_within_threshold_and_records_distance(conn):
     cluster_id = add_cluster(conn, signal_id, base_vector())
     event_id = add_event(conn, version_id, vector_at(0.29, axis=1))
 
-    assert assign_pool(conn, THRESHOLD) == 1
+    assert len(assign_pool(conn, THRESHOLD)) == 1
     assert cluster_of(conn, event_id) == cluster_id
     recorded = conn.execute(
         "SELECT distance FROM cluster_members WHERE event_id = %s", (event_id,)
@@ -51,7 +51,7 @@ def test_assign_pool_leaves_event_beyond_threshold_in_pool(conn):
     add_cluster(conn, signal_id, base_vector())
     event_id = add_event(conn, version_id, vector_at(0.31, axis=1))
 
-    assert assign_pool(conn, THRESHOLD) == 0
+    assert len(assign_pool(conn, THRESHOLD)) == 0
     assert cluster_of(conn, event_id) is None
 
 
@@ -62,7 +62,7 @@ def test_assign_pool_picks_the_nearer_of_two_clusters(conn):
     # 0.10 from the near cluster, 1 - 0.9 * 0.8 = 0.28 from the other: both within the threshold.
     event_id = add_event(conn, version_id, vector_at(0.1, axis=1))
 
-    assert assign_pool(conn, THRESHOLD) == 1
+    assert len(assign_pool(conn, THRESHOLD)) == 1
     assert cluster_of(conn, event_id) == near_cluster
 
 
@@ -82,11 +82,11 @@ def test_assign_pool_never_joins_another_signals_cluster(conn):
     other_cluster = add_cluster(conn, other_signal, vector_at(0.1, axis=1))  # distance 0 to the event
     lonely_event = add_event(conn, own_version, vector_at(0.1, axis=1))
 
-    assert assign_pool(conn, THRESHOLD) == 0
+    assert len(assign_pool(conn, THRESHOLD)) == 0
     assert cluster_of(conn, lonely_event) is None
 
     own_cluster = add_cluster(conn, own_signal, base_vector())  # 0.10 away: farther than the other
-    assert assign_pool(conn, THRESHOLD) == 1
+    assert len(assign_pool(conn, THRESHOLD)) == 1
     assert cluster_of(conn, lonely_event) == own_cluster
     assert cluster_of(conn, lonely_event) != other_cluster
 
@@ -95,7 +95,7 @@ def test_assign_pool_leaves_event_in_pool_when_signal_has_no_clusters(conn):
     _, version_id = add_signal(conn)
     event_id = add_event(conn, version_id, base_vector())
 
-    assert assign_pool(conn, THRESHOLD) == 0
+    assert len(assign_pool(conn, THRESHOLD)) == 0
     assert cluster_of(conn, event_id) is None
 
 
@@ -104,7 +104,7 @@ def test_assign_pool_ignores_clusters_without_a_center(conn):
     add_cluster(conn, signal_id, None)
     event_id = add_event(conn, version_id, base_vector())
 
-    assert assign_pool(conn, THRESHOLD) == 0
+    assert len(assign_pool(conn, THRESHOLD)) == 0
     assert cluster_of(conn, event_id) is None
 
 
@@ -113,7 +113,7 @@ def test_assign_pool_ignores_non_leaf_clusters(conn):
     add_cluster(conn, signal_id, base_vector(), level=1)
     event_id = add_event(conn, version_id, base_vector())
 
-    assert assign_pool(conn, THRESHOLD) == 0
+    assert len(assign_pool(conn, THRESHOLD)) == 0
     assert cluster_of(conn, event_id) is None
 
 
@@ -127,7 +127,7 @@ def test_assign_pool_does_not_reconsider_members(conn):
         (event_id, far_cluster),
     )
 
-    assert assign_pool(conn, THRESHOLD) == 0
+    assert len(assign_pool(conn, THRESHOLD)) == 0
     assert cluster_of(conn, event_id) == far_cluster
 
 
@@ -137,8 +137,8 @@ def test_assign_pool_second_pass_does_nothing(conn):
     add_event(conn, version_id, vector_at(0.1, axis=1))
     add_event(conn, version_id, vector_at(0.2, axis=2))
 
-    assert assign_pool(conn, THRESHOLD) == 2
-    assert assign_pool(conn, THRESHOLD) == 0
+    assert len(assign_pool(conn, THRESHOLD)) == 2
+    assert len(assign_pool(conn, THRESHOLD)) == 0
 
 
 def test_assign_pool_rechecks_waiting_events_on_later_passes(conn):
@@ -148,12 +148,12 @@ def test_assign_pool_rechecks_waiting_events_on_later_passes(conn):
     cluster_id = add_cluster(conn, signal_id, base_vector())
     event_id = add_event(conn, version_id, vector_at(0.33, axis=1))
 
-    assert assign_pool(conn, THRESHOLD) == 0
+    assert len(assign_pool(conn, THRESHOLD)) == 0
     conn.execute(
         "UPDATE clusters SET centroid = %s WHERE id = %s",
         (vector_text(vector_at(0.05, axis=1)), cluster_id),
     )
-    assert assign_pool(conn, THRESHOLD) == 1
+    assert len(assign_pool(conn, THRESHOLD)) == 1
     assert cluster_of(conn, event_id) == cluster_id
 
 

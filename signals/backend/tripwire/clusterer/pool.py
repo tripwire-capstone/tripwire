@@ -16,7 +16,8 @@ Implementation choices (decided Nov 10, reasons in the PR):
   * The merging uses SciPy's standard average linkage, replacing the prototype's hand-written
     version: real pools can reach thousands of events.
   * A new cluster gets its center (the average of its members) when it's created, so the next
-    pass's assign can use it straight away.
+    pass's assign can use it straight away. The center comes from naming.update_centers(), the
+    same function step 5 uses (Nov 11), so the formula is written once.
   * One transaction per Signal. An error in one Signal is logged and the others carry on, so a
     Signal with bad data can't stop every other Signal from getting new clusters.
 """
@@ -27,6 +28,8 @@ from dataclasses import dataclass
 
 import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
+
+from .naming import update_centers
 
 log = logging.getLogger("clusterer")
 
@@ -55,20 +58,23 @@ WHERE NOT EXISTS (
 ORDER BY sig_version.signal_id, pool_event.event_id
 """
 
-# The center is the average of the members' embeddings (pgvector's avg()). Cosine distance
-# ignores length, so the average doesn't need normalizing.
-CREATE_CLUSTER_SQL = """
-INSERT INTO clusters (signal_id, centroid)
-SELECT %s, avg(embedding) FROM event_embeddings WHERE event_id = ANY(%s)
-RETURNING id
-"""
+# A new cluster is saved without a center; naming.update_centers() sets it, so the "center =
+# average of members" rule lives in one place for new and grown clusters alike.
+CREATE_CLUSTER_SQL = "INSERT INTO clusters (signal_id) VALUES (%s) RETURNING id"
 
 ADD_MEMBERS_SQL = """
-INSERT INTO cluster_members (event_id, cluster_id, distance)
-SELECT embedded.event_id, new_cluster.id, embedded.embedding <=> new_cluster.centroid
-FROM event_embeddings embedded
-JOIN clusters new_cluster ON new_cluster.id = %s
-WHERE embedded.event_id = ANY(%s)
+INSERT INTO cluster_members (event_id, cluster_id)
+SELECT event_id, %s FROM event_embeddings WHERE event_id = ANY(%s)
+"""
+
+# Each member's distance to the center it was just given (the "distance when assigned").
+RECORD_DISTANCES_SQL = """
+UPDATE cluster_members member
+SET distance = embedded.embedding <=> owner.centroid
+FROM event_embeddings embedded, clusters owner
+WHERE member.cluster_id = %s
+  AND embedded.event_id = member.event_id
+  AND owner.id = member.cluster_id
 """
 
 
@@ -119,9 +125,15 @@ def qualifying_groups(events, threshold, min_events, min_conversations):
 
 
 def create_cluster(conn, signal_id, event_ids):
-    """One new leaf cluster with its center and members. Returns its ID. Unnamed until naming."""
-    cluster_id = conn.execute(CREATE_CLUSTER_SQL, (signal_id, event_ids)).fetchone()[0]
+    """One new leaf cluster with its center and members. Returns its ID. Unnamed until naming.
+
+    Runs inside the caller's per-Signal transaction, so the cluster never exists without its
+    center, nor members without their distances.
+    """
+    cluster_id = conn.execute(CREATE_CLUSTER_SQL, (signal_id,)).fetchone()[0]
     conn.execute(ADD_MEMBERS_SQL, (cluster_id, event_ids))
+    update_centers(conn, [cluster_id])
+    conn.execute(RECORD_DISTANCES_SQL, (cluster_id,))
     return cluster_id
 
 

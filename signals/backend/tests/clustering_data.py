@@ -68,6 +68,28 @@ def add_cluster(conn, signal_id, centroid, level=0):
     ).fetchone()[0]
 
 
+def add_member(conn, event_id, cluster_id):
+    """Put an event in a cluster directly (as assign or pool grouping would)."""
+    conn.execute(
+        "INSERT INTO cluster_members (event_id, cluster_id, distance) VALUES (%s, %s, 0)",
+        (event_id, cluster_id),
+    )
+
+
+def add_summary(conn, event_id, summary):
+    """A finished (`done`) summary for an event, shaped like the prepare half writes it."""
+    conn.execute(
+        """INSERT INTO event_summaries (event_id, status, cause, summary, model, prompt_version,
+                                        attempts, finished_at)
+           VALUES (%s, 'done', 'test cause', %s, 'test-model', 1, 1, now())""",
+        (event_id, summary),
+    )
+
+
+def name_of(conn, cluster_id):
+    return conn.execute("SELECT name FROM clusters WHERE id = %s", (cluster_id,)).fetchone()[0]
+
+
 def cluster_of(conn, event_id):
     """The event's cluster ID, or None if it's in the pool."""
     row = conn.execute(

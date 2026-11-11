@@ -248,7 +248,7 @@ def test_new_cluster_takes_members_through_assign_on_the_next_pass(conn):
     cluster_id = next(iter(clusters_of_signal(conn, signal_id)))
 
     newcomer = add_event(conn, version_id, vector_at(0.05, axis=4), session_id="conversation-4")
-    assert assign_pool(conn, THRESHOLD) == 1
+    assert len(assign_pool(conn, THRESHOLD)) == 1
     assert cluster_of(conn, newcomer) == cluster_id
 
 
