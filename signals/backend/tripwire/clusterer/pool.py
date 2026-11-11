@@ -16,9 +16,15 @@ Implementation choices (decided Nov 10, reasons in the PR):
   * The merging uses SciPy's standard average linkage, replacing the prototype's hand-written
     version: real pools can reach thousands of events.
   * A new cluster gets its center (the average of its members) when it's created, so the next
-    pass's assign can use it straight away.
+    pass's assign can use it straight away. The center comes from naming.update_centers(), the
+    same function step 5 uses (Nov 11), so the formula is written once.
   * One transaction per Signal. An error in one Signal is logged and the others carry on, so a
     Signal with bad data can't stop every other Signal from getting new clusters.
+  * Grouping keeps the plain threshold, even once assign gets its LLM middle band (Q7, later): the
+    bands are part of the *join* rule. Grouping compares every pool pair, far too many for LLM calls,
+    and SciPy takes a single cutoff (decided Nov 11).
+  * SciPy's metric must stay "cosine", the same as pgvector's <=> in assign and naming, or the two
+    would disagree about what the threshold means (tests/test_distance_guards.py checks they agree).
 """
 
 import json
@@ -27,6 +33,9 @@ from dataclasses import dataclass
 
 import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
+
+from .naming import update_centers
+from .sql import event_signal, in_the_pool
 
 log = logging.getLogger("clusterer")
 
@@ -41,34 +50,35 @@ class PoolEvent:
 
 # Pool events inside the window, with their Signal and conversation. Ordered so every pass
 # sees the same events in the same order.
-POOL_SQL = """
+POOL_SQL = f"""
 SELECT pool_event.event_id, sig_version.signal_id, trace.session_id, trace.id,
        pool_event.embedding::text
 FROM event_embeddings pool_event
 JOIN signal_events sig_event ON sig_event.id = pool_event.event_id
-JOIN signal_versions sig_version ON sig_version.id = sig_event.signal_version_id
+{event_signal("sig_event", "sig_version")}
 JOIN traces trace ON trace.id = sig_event.trace_id
-WHERE NOT EXISTS (
-    SELECT 1 FROM cluster_members member WHERE member.event_id = pool_event.event_id
-)
+WHERE {in_the_pool("pool_event")}
   AND sig_event.created_at >= now() - make_interval(days => %s)
 ORDER BY sig_version.signal_id, pool_event.event_id
 """
 
-# The center is the average of the members' embeddings (pgvector's avg()). Cosine distance
-# ignores length, so the average doesn't need normalizing.
-CREATE_CLUSTER_SQL = """
-INSERT INTO clusters (signal_id, centroid)
-SELECT %s, avg(embedding) FROM event_embeddings WHERE event_id = ANY(%s)
-RETURNING id
-"""
+# A new cluster is saved without a center; naming.update_centers() sets it, so the "center =
+# average of members" rule lives in one place for new and grown clusters alike.
+CREATE_CLUSTER_SQL = "INSERT INTO clusters (signal_id) VALUES (%s) RETURNING id"
 
 ADD_MEMBERS_SQL = """
-INSERT INTO cluster_members (event_id, cluster_id, distance)
-SELECT embedded.event_id, new_cluster.id, embedded.embedding <=> new_cluster.centroid
-FROM event_embeddings embedded
-JOIN clusters new_cluster ON new_cluster.id = %s
-WHERE embedded.event_id = ANY(%s)
+INSERT INTO cluster_members (event_id, cluster_id)
+SELECT event_id, %s FROM event_embeddings WHERE event_id = ANY(%s)
+"""
+
+# Each member's distance to the center it was just given (the "distance when assigned").
+RECORD_DISTANCES_SQL = """
+UPDATE cluster_members member
+SET distance = embedded.embedding <=> owner.centroid
+FROM event_embeddings embedded, clusters owner
+WHERE member.cluster_id = %s
+  AND embedded.event_id = member.event_id
+  AND owner.id = member.cluster_id
 """
 
 
@@ -119,9 +129,15 @@ def qualifying_groups(events, threshold, min_events, min_conversations):
 
 
 def create_cluster(conn, signal_id, event_ids):
-    """One new leaf cluster with its center and members. Returns its ID. Unnamed until naming."""
-    cluster_id = conn.execute(CREATE_CLUSTER_SQL, (signal_id, event_ids)).fetchone()[0]
+    """One new leaf cluster with its center and members. Returns its ID. Unnamed until naming.
+
+    Runs inside the caller's per-Signal transaction, so the cluster never exists without its
+    center, nor members without their distances.
+    """
+    cluster_id = conn.execute(CREATE_CLUSTER_SQL, (signal_id,)).fetchone()[0]
     conn.execute(ADD_MEMBERS_SQL, (cluster_id, event_ids))
+    update_centers(conn, [cluster_id])
+    conn.execute(RECORD_DISTANCES_SQL, (cluster_id,))
     return cluster_id
 
 

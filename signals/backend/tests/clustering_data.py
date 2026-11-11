@@ -30,11 +30,13 @@ def add_version(conn, signal_id, version_number):
     ).fetchone()[0]
 
 
-def add_event(conn, version_id, embedding, session_id=None, created_days_ago=0):
+def add_event(conn, version_id, embedding, session_id=None, created_days_ago=0,
+              created_minutes_ago=0, source="live"):
     """A trace (in `session_id`, or none), a done run, an event and its embedding.
 
-    `created_days_ago` backdates the event's created_at, for pool window tests.
-    Returns the event ID.
+    `embedding=None` leaves the event unembedded (not yet prepared). `created_days_ago` /
+    `created_minutes_ago` backdate the event's created_at (pool window, health tests). `source` is
+    the run's source: "live" or "backfill". Returns the event ID.
     """
     trace_id = conn.execute(
         """INSERT INTO traces (project_id, laminar_trace_id, session_id, started_at, ended_at, status)
@@ -42,22 +44,23 @@ def add_event(conn, version_id, embedding, session_id=None, created_days_ago=0):
         (project_id(conn), str(uuid.uuid4()), session_id),
     ).fetchone()[0]
     run_id = conn.execute(
-        """INSERT INTO signal_runs (trace_id, signal_version_id, status, finished_at)
-           VALUES (%s, %s, 'done', now()) RETURNING id""",
-        (trace_id, version_id),
+        """INSERT INTO signal_runs (trace_id, signal_version_id, source, status, finished_at)
+           VALUES (%s, %s, %s, 'done', now()) RETURNING id""",
+        (trace_id, version_id, source),
     ).fetchone()[0]
     event_id = conn.execute(
         """INSERT INTO signal_events (run_id, trace_id, signal_version_id, severity, description,
                                       judge_input, created_at)
            VALUES (%s, %s, %s, 'warning', 'test event', 'test input',
-                   now() - make_interval(days => %s))
+                   now() - make_interval(days => %s, mins => %s))
            RETURNING id""",
-        (run_id, trace_id, version_id, created_days_ago),
+        (run_id, trace_id, version_id, created_days_ago, created_minutes_ago),
     ).fetchone()[0]
-    conn.execute(
-        "INSERT INTO event_embeddings (event_id, model, embedding) VALUES (%s, 'test', %s)",
-        (event_id, vector_text(embedding)),
-    )
+    if embedding is not None:
+        conn.execute(
+            "INSERT INTO event_embeddings (event_id, model, embedding) VALUES (%s, 'test', %s)",
+            (event_id, vector_text(embedding)),
+        )
     return event_id
 
 
@@ -66,6 +69,38 @@ def add_cluster(conn, signal_id, centroid, level=0):
         "INSERT INTO clusters (signal_id, level, centroid) VALUES (%s, %s, %s) RETURNING id",
         (signal_id, level, None if centroid is None else vector_text(centroid)),
     ).fetchone()[0]
+
+
+def add_member(conn, event_id, cluster_id):
+    """Put an event in a cluster directly (as assign or pool grouping would)."""
+    conn.execute(
+        "INSERT INTO cluster_members (event_id, cluster_id, distance) VALUES (%s, %s, 0)",
+        (event_id, cluster_id),
+    )
+
+
+def add_summary(conn, event_id, summary):
+    """A finished (`done`) summary for an event, shaped like the prepare half writes it."""
+    conn.execute(
+        """INSERT INTO event_summaries (event_id, status, cause, summary, model, prompt_version,
+                                        attempts, finished_at)
+           VALUES (%s, 'done', 'test cause', %s, 'test-model', 1, 1, now())""",
+        (event_id, summary),
+    )
+
+
+def add_failed_summary(conn, event_id, error_kind="bad_output"):
+    """A `failed` summary for an event, as the prepare half writes it after giving up."""
+    conn.execute(
+        """INSERT INTO event_summaries (event_id, status, model, prompt_version, attempts, error_kind,
+                                        last_error, finished_at)
+           VALUES (%s, 'failed', 'test-model', 1, 3, %s, 'test error', now())""",
+        (event_id, error_kind),
+    )
+
+
+def name_of(conn, cluster_id):
+    return conn.execute("SELECT name FROM clusters WHERE id = %s", (cluster_id,)).fetchone()[0]
 
 
 def cluster_of(conn, event_id):

@@ -15,6 +15,8 @@ far can join once a cluster's center moves closer.
 import enum
 from dataclasses import dataclass
 
+from .sql import event_signal, in_the_pool, leaf_cluster
+
 
 class Decision(enum.Enum):
     JOIN = "join"
@@ -51,24 +53,26 @@ def decide(distance, threshold):
 # the same Signal by cosine distance (pgvector's <=>). Ties go to the lower cluster ID, so the
 # result never depends on row order. Events whose Signal has no cluster with a center yet
 # don't appear: they stay in the pool.
-NEAREST_CLUSTER_SQL = """
+#
+# Distance must stay the same metric as pool.py's SciPy grouping (cosine), and this search must
+# stay EXACT: an approximate pgvector index (HNSW / IVFFlat) could return the second-closest
+# cluster without any error. Both are guarded by tests/test_distance_guards.py.
+NEAREST_CLUSTER_SQL = f"""
 SELECT pool_event.event_id, nearest.cluster_id, nearest.distance
 FROM event_embeddings pool_event
 JOIN signal_events sig_event ON sig_event.id = pool_event.event_id
-JOIN signal_versions sig_version ON sig_version.id = sig_event.signal_version_id
+{event_signal("sig_event", "sig_version")}
 CROSS JOIN LATERAL (
     SELECT candidate.id AS cluster_id,
            candidate.centroid <=> pool_event.embedding AS distance
     FROM clusters candidate
     WHERE candidate.signal_id = sig_version.signal_id
-      AND candidate.level = 0
+      AND {leaf_cluster("candidate")}
       AND candidate.centroid IS NOT NULL
     ORDER BY distance, candidate.id
     LIMIT 1
 ) nearest
-WHERE NOT EXISTS (
-    SELECT 1 FROM cluster_members member WHERE member.event_id = pool_event.event_id
-)
+WHERE {in_the_pool("pool_event")}
 ORDER BY pool_event.event_id
 """
 
@@ -82,7 +86,8 @@ def find_nearest(conn):
 def assign_pool(conn, threshold):
     """Decide for every pool event, then apply all the joins in one transaction.
 
-    Returns how many events joined a cluster. Doesn't move any center (that's step 5).
+    Returns the joins (one Candidate per event that joined), so the caller knows which clusters
+    gained members: step 5 recomputes only those centers. Doesn't move any center itself.
     """
     with conn.transaction():
         joins = [
@@ -91,7 +96,7 @@ def assign_pool(conn, threshold):
             if decide(candidate.distance, threshold) is Decision.JOIN
         ]
         if not joins:
-            return 0
+            return []
         with conn.cursor() as cursor:
             cursor.executemany(
                 """INSERT INTO cluster_members (event_id, cluster_id, distance)
@@ -102,4 +107,4 @@ def assign_pool(conn, threshold):
                 "UPDATE clusters SET updated_at = now() WHERE id = ANY(%s)",
                 (sorted({join.cluster_id for join in joins}),),
             )
-    return len(joins)
+    return joins

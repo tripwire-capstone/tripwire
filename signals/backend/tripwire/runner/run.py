@@ -1,12 +1,13 @@
-"""PLACEHOLDER signal runner: one step of judging new traces, without an LLM.
+"""PLACEHOLDER signal runner: finishes pending runs without an LLM.
 
-For every trace that has no run yet for an active signal's current version:
-  * write a `done` run (no tokens, no cost)
-  * for about STUB_EVENT_RATE of them (decided by the trace ID's hash), also write a
+The poller creates a pending run for every new trace and matching signal. This step
+takes up to `batch` of them and, for each:
+  * marks it `done` (no tokens, no cost)
+  * for about STUB_EVENT_RATE of them (decided by the trace ID's hash), also writes a
     canned event
 
-Assumes one runner. To be replaced by the real job flow (fan-out, claiming with
-leases, retries; SQL in CONTRACT.md) and the real judge(trace, version).
+Runs of a turned-off signal are left pending. To be replaced by the real job flow
+(claiming with leases, retries, the judge).
 """
 
 import logging
@@ -15,52 +16,40 @@ from ..placeholder import picked
 
 log = logging.getLogger("runner")
 
-# Traces missing a run for an active signal's current (highest) version.
-UNJUDGED_SQL = """
-SELECT t.id, t.laminar_trace_id::text, v.id
-FROM traces t
-JOIN signals s ON s.project_id = t.project_id AND s.active
-JOIN LATERAL (
-    SELECT id FROM signal_versions
-    WHERE signal_id = s.id
-    ORDER BY version_number DESC
-    LIMIT 1
-) v ON true
-WHERE NOT EXISTS (
-    SELECT 1 FROM signal_runs r
-    WHERE r.trace_id = t.id AND r.signal_version_id = v.id
-)
-ORDER BY t.ended_at
+PENDING_SQL = """
+SELECT r.id, r.trace_id, t.laminar_trace_id::text, r.signal_version_id
+FROM signal_runs r
+JOIN traces t ON t.id = r.trace_id
+JOIN signal_versions v ON v.id = r.signal_version_id
+JOIN signals s ON s.id = v.signal_id
+WHERE r.status = 'pending' AND s.active
+ORDER BY r.created_at, r.id
 LIMIT %s
+FOR UPDATE OF r SKIP LOCKED
 """
 
 
 def run_step(conn, event_rate, batch=100):
-    """Judge up to `batch` (trace, version) pairs in one transaction. Returns (runs, events)."""
+    """Finish up to `batch` pending runs in one transaction. Returns (runs, events)."""
     runs = events = 0
     with conn.transaction(), conn.cursor() as cur:
-        cur.execute(UNJUDGED_SQL, (batch,))
-        for trace_id, laminar_trace_id, version_id in cur.fetchall():
+        cur.execute(PENDING_SQL, (batch,))
+        for run_id, trace_id, laminar_trace_id, version_id in cur.fetchall():
             cur.execute(
-                """INSERT INTO signal_runs
-                       (trace_id, signal_version_id, status, attempts, model,
-                        input_tokens, cached_input_tokens, output_tokens, cost_usd,
-                        started_at, finished_at)
-                   VALUES (%s, %s, 'done', 1, 'placeholder', 0, 0, 0, 0, now(), now())
-                   ON CONFLICT (trace_id, signal_version_id) DO NOTHING
-                   RETURNING id""",
-                (trace_id, version_id),
+                """UPDATE signal_runs
+                   SET status = 'done', attempts = 1, model = 'placeholder',
+                       input_tokens = 0, cached_input_tokens = 0, output_tokens = 0, cost_usd = 0,
+                       started_at = now(), finished_at = now()
+                   WHERE id = %s""",
+                (run_id,),
             )
-            row = cur.fetchone()
-            if row is None:  # someone else judged it meanwhile
-                continue
             runs += 1
             if picked(f"event:{laminar_trace_id}", event_rate):
                 cur.execute(
                     """INSERT INTO signal_events
                            (run_id, trace_id, signal_version_id, severity, description, judge_input)
                        VALUES (%s, %s, %s, 'warning', %s, 'placeholder')""",
-                    (row[0], trace_id, version_id,
+                    (run_id, trace_id, version_id,
                      f"Placeholder event for trace {laminar_trace_id[:8]}"),
                 )
                 events += 1

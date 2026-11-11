@@ -147,7 +147,7 @@ migration runner is a separate CONTRACT.md open item; don't build it inside this
 - **Finish (success):** one transaction: update the run to `done` (guarded by `status = 'running' AND
   attempts = <claimed attempts>`; 0 rows → roll back, someone else owns it) with model, tokens, cost,
   `analysis`, `raw_output`, `dropped_findings`; insert one `signal_events` row per finding with
-  `finding_index` 0..n-1, `payload = fields`, `span_ids`, `judge_input`.
+  `finding_index` 0..n-1, `payload = fields`, `span_ids`, `evidence_labels`, `judge_input`.
 - **Finish (`JudgeError`):**
 
   | `retryable` | `uses_attempt` | Action |
