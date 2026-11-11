@@ -99,8 +99,34 @@ Then sleep `CLUSTERER_INTERVAL_SECONDS` (default 10).
 | `CLUSTER_POOL_WINDOW_DAYS` | 14 | Q9 |
 | `CLUSTER_HEALTH_STALL_MINUTES` | 15 | Q12 |
 | `CLUSTER_HEALTH_FAILURE_RUN` | 10 | Q12 |
-| `SUMMARIZER_MODEL` | a small model, window ≥ the judge's | Q3, Q4 |
+| `SUMMARIZER_MODEL` | `gpt-6-luna` | Q3, Q4; summarizer below |
+| `SUMMARIZER_PROMPT_VERSION` | 1 (needs `prompts/summarize_v1.md` + `.schema.json`) | summarizer below |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` (1536 dims, one model only) | existing |
+
+## Summarizer (PR 2, decided Nov 10-11)
+
+Code: `tripwire/clusterer/summarize.py`, `llm_client.py`, `prompts/`. Full reasoning: Design Notes Q17-Q20.
+
+- **Input** (`load_event` + `build_messages`): the instruction of the Signal version that judged *this*
+  event (not the latest); Signal name and field descriptions; `severity`, `payload`, and `description` /
+  evidence labels only if present; `judge_input` unchanged. The judge's `analysis` is left out (it covers
+  every finding of a run). Order: system prompt, then `<tripwire_trace>`, `<tripwire_signal>`, and this
+  event's `<tripwire_finding>` **last** (focus; siblings share the trace prefix). Tags have unusual names;
+  `judge_input` is not escaped. Prompt injection via traces: post-MVP, together with the Signals pair.
+- **Prompt v1:** states the purpose (summaries are grouped, so the same problem must read the same), a fixed
+  sentence shape (what happened, then product area), two examples from a domain we don't test, "one
+  sentence, under 30 words". Strict output `{cause, summary}`. A summary over 300 characters is **logged,
+  not rejected** (MVP).
+- **Prompt files:** `prompts/summarize_vN.md` + `.schema.json`; never edit a used version, add the next
+  number. Each row stores `prompt_version`.
+- **After each call** (`decide`, pure; `save`, one upsert): good → `done`; blank field or bad output →
+  retry after 1 min, `failed` on the 3rd attempt; too long / refused → `failed` at once; service error →
+  `pending`, no attempt used, retry after 30 s (or OpenAI's `retry-after` if longer). Tokens and cost add up
+  over every paid call. **Our own bugs are not caught** (fail loudly); `prepare_events` (PR 4) must catch
+  per event, log, and skip that event until restart, so one bad event can't block the queue or re-pay.
+- **LLM client:** a stand-in shaped like the Signals pair's proposed `tripwire/llm/`; SDK retries off (one
+  call = one paid request); OpenAI errors become `LLMServiceError` / `LLMBadOutput` / `LLMInputTooLong` /
+  `LLMRefused`; anything else (wrong key, bad request) raises as-is. Prompt caching left at OpenAI's default.
 
 ## The seam between the two halves
 
@@ -122,6 +148,13 @@ Signals pair owns.
   match), name refresh (#20). Use the **same distance rule** as assignment so rebuilds stay consistent.
 - LLM check for the middle band (Q7), LLM naming (Q10), input size limit (Q3), two workers (Q13),
   parallel summarizer calls, failure states in the UI (Q12).
+- Summarizer: growing waits (service: derive from `not_before − updated_at`, double, cap 5 min; bad output:
+  1 min then 5 min), waits as settings, enforcing a summary length, comparing prompt versions (v1 vs bare
+  rules vs no `cause`) on real judge output with park-traffic's answer key, prompt caching on/off.
+- `prepare_events`: end the pass on a service error (shared OpenAI key and rate limits with the judge); top
+  of PR 4's list if time allows.
+- Re-queue command (PR 5): until then, `UPDATE event_summaries SET status = 'pending', finished_at = NULL, attempts = 0
+  WHERE status = 'failed'`.
 
 ## Open items (outside the clusterer, or waiting on others)
 

@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "cause": {"type": "string"},
+    "summary": {"type": "string"}
+  },
+  "required": ["cause", "summary"],
+  "additionalProperties": false
+}

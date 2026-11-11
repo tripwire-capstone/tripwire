@@ -92,3 +92,14 @@ def test_env_example_lists_every_clusterer_setting_with_the_same_default():
     for name, (default, kind) in DEFAULTS.items():
         assert name in documented, f"{name} is missing from .env.example"
         assert kind(documented[name]) == default, f"{name}: .env.example says {documented[name]}, code says {default}"
+
+
+def test_summarizer_defaults_to_gpt_6_luna_and_prompt_version_1():
+    settings = load_settings(BASE)
+    assert (settings.summarizer_model, settings.summarizer_prompt_version) == ("gpt-6-luna", 1)
+
+
+def test_load_settings_rejects_a_prompt_version_with_no_prompt_files():
+    message = problem_with(SUMMARIZER_PROMPT_VERSION=12)
+    assert "SUMMARIZER_PROMPT_VERSION=12 has no prompt files" in message
+    assert "summarize_v12.md" in message
