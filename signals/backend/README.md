@@ -9,6 +9,7 @@ Laminar ──► poller ──► traces ──► runner ──► signal_runs
           (real)                (placeholder)                              (placeholder)
 ```
 
+Day-to-day commands (run, traffic, database): [`docs/CHEATSHEET.md`](docs/CHEATSHEET.md).
 Design, table owners and open questions: [`CONTRACT.md`](CONTRACT.md).
 Tables: [`migrations/20261109120000_initial_schema.sql`](migrations/20261109120000_initial_schema.sql).
 
