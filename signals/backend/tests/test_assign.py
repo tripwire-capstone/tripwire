@@ -6,101 +6,16 @@ floats, so database distances are only accurate to about 1e-6: the exact-boundar
 """
 
 import random
-import uuid
 
 import pytest
 
-from tests.vectors import base_vector, distance_between, vector_at
+from tests.clustering_data import add_cluster, add_event, add_signal, cluster_of
+from tests.vectors import base_vector, vector_at
 from tripwire.clusterer.assign import Decision, assign_pool, decide
 from tripwire.placeholder import vector_text
 
 THRESHOLD = 0.30
 TOLERANCE = 1e-5
-
-
-def project_id(conn):
-    return conn.execute("SELECT id FROM projects WHERE name = 'test'").fetchone()[0]
-
-
-def add_signal(conn, name="Signal A"):
-    """A signal with one version. Returns (signal_id, version_id)."""
-    signal_id = conn.execute(
-        "INSERT INTO signals (project_id, name) VALUES (%s, %s) RETURNING id",
-        (project_id(conn), name),
-    ).fetchone()[0]
-    version_id = conn.execute(
-        """INSERT INTO signal_versions (signal_id, version_number, instruction, output_schema, model)
-           VALUES (%s, 1, 'test instruction', '{}', 'test-model') RETURNING id""",
-        (signal_id,),
-    ).fetchone()[0]
-    return signal_id, version_id
-
-
-def add_event(conn, version_id, embedding):
-    """A trace, a done run, an event and its embedding. Returns the event ID."""
-    trace_id = conn.execute(
-        """INSERT INTO traces (project_id, laminar_trace_id, started_at, ended_at, status)
-           VALUES (%s, %s, now() - interval '1 minute', now(), 'success') RETURNING id""",
-        (project_id(conn), str(uuid.uuid4())),
-    ).fetchone()[0]
-    run_id = conn.execute(
-        """INSERT INTO signal_runs (trace_id, signal_version_id, status, finished_at)
-           VALUES (%s, %s, 'done', now()) RETURNING id""",
-        (trace_id, version_id),
-    ).fetchone()[0]
-    event_id = conn.execute(
-        """INSERT INTO signal_events (run_id, trace_id, signal_version_id, severity, description,
-                                      judge_input)
-           VALUES (%s, %s, %s, 'warning', 'test event', 'test input') RETURNING id""",
-        (run_id, trace_id, version_id),
-    ).fetchone()[0]
-    conn.execute(
-        "INSERT INTO event_embeddings (event_id, model, embedding) VALUES (%s, 'test', %s)",
-        (event_id, vector_text(embedding)),
-    )
-    return event_id
-
-
-def add_cluster(conn, signal_id, centroid, level=0):
-    return conn.execute(
-        "INSERT INTO clusters (signal_id, level, centroid) VALUES (%s, %s, %s) RETURNING id",
-        (signal_id, level, None if centroid is None else vector_text(centroid)),
-    ).fetchone()[0]
-
-
-def cluster_of(conn, event_id):
-    """The event's cluster ID, or None if it's in the pool."""
-    row = conn.execute(
-        "SELECT cluster_id FROM cluster_members WHERE event_id = %s", (event_id,)
-    ).fetchone()
-    return None if row is None else row[0]
-
-
-def cosine_distance(conn, vector_a, vector_b):
-    return conn.execute(
-        "SELECT %s::vector <=> %s::vector", (vector_text(vector_a), vector_text(vector_b))
-    ).fetchone()[0]
-
-
-# ------------------------------------------------------------------ test helper
-
-def test_vectors_helper_gives_exact_distance_from_base(conn):
-    for distance in (0.0, 0.1, 0.29, 0.31, 0.5, 1.0):
-        measured = cosine_distance(conn, base_vector(), vector_at(distance, axis=1))
-        assert measured == pytest.approx(distance, abs=TOLERANCE)
-
-
-def test_vectors_helper_predicts_distance_between_two_axes(conn):
-    measured = cosine_distance(conn, vector_at(0.1, axis=1), vector_at(0.2, axis=2))
-    assert measured == pytest.approx(distance_between(0.1, 0.2), abs=TOLERANCE)
-
-
-def test_vectors_helper_rejects_out_of_range_input():
-    with pytest.raises(ValueError):
-        vector_at(1.5, axis=1)
-    with pytest.raises(ValueError):
-        vector_at(0.2, axis=0)
-
 
 # ------------------------------------------------------------------ decide
 
