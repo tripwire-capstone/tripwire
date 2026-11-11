@@ -14,6 +14,7 @@ def seeded(conn):
 
 
 def add_traces(conn, project_id, n):
+    """n traces, each with a pending run for every active signal's current version (as the poller does)."""
     ids = []
     for i in range(n):
         tid = str(uuid.UUID(int=i + 1))
@@ -21,6 +22,12 @@ def add_traces(conn, project_id, n):
                         VALUES (%s, %s, now() - interval '1 minute', now(), 'success')""",
                      (project_id, tid))
         ids.append(tid)
+    conn.execute("""INSERT INTO signal_runs (trace_id, signal_version_id)
+                    SELECT t.id, v.id FROM traces t
+                    JOIN signals s ON s.project_id = t.project_id AND s.active
+                    JOIN LATERAL (SELECT id FROM signal_versions WHERE signal_id = s.id
+                                  ORDER BY version_number DESC LIMIT 1) v ON true
+                    ON CONFLICT DO NOTHING""")
     return ids
 
 
@@ -59,26 +66,23 @@ def test_runner_second_step_does_nothing(conn):
 def test_event_rate_zero_and_one(conn):
     add_traces(conn, seeded(conn), 5)
     assert run_step(conn, 0.0) == (5, 0)
-    conn.execute("DELETE FROM signal_runs")
+    conn.execute("UPDATE signal_runs SET status = 'pending', finished_at = NULL")
     assert run_step(conn, 1.0) == (5, 5)
 
-
-def test_new_version_gets_its_own_runs_and_the_old_one_gets_none(conn):
+def test_runner_never_creates_runs(conn):
     add_traces(conn, seeded(conn), 3)
     run_step(conn, 0.5)
     conn.execute("""INSERT INTO signal_versions (signal_id, version_number, instruction, output_schema, model)
-                    SELECT signal_id, 2, 'v2', '{}', 'placeholder' FROM signal_versions""")
-    assert run_step(conn, 0.5)[0] == 3
-    assert conn.execute("""SELECT v.version_number, count(*) FROM signal_runs r
-                           JOIN signal_versions v ON v.id = r.signal_version_id
-                           GROUP BY 1 ORDER BY 1""").fetchall() == [(1, 3), (2, 3)]
+                    SELECT signal_id, 2, 'v2', '[]', 'placeholder' FROM signal_versions""")
+    assert run_step(conn, 0.5) == (0, 0)
+    assert count(conn, "signal_runs") == 3
 
 
-def test_inactive_signal_gets_no_runs(conn):
+def test_runs_of_an_inactive_signal_stay_pending(conn):
     add_traces(conn, seeded(conn), 3)
     conn.execute("UPDATE signals SET active = false")
     assert run_step(conn, 0.5) == (0, 0)
-
+    assert conn.execute("SELECT count(*) FROM signal_runs WHERE status = 'pending'").fetchone()[0] == 3
 
 # ------------------------------------------------------------------ clusterer
 

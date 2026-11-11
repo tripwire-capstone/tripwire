@@ -1,21 +1,21 @@
-"""One poll of one project: find traces that finished in Laminar and store them.
+"""One poll of one project: find traces that finished in Laminar, store them, and create
+their signal runs.
 
     marker = newest ended_at already in `traces` for this project
     query  = root spans that ended after (marker - overlap)
              and at least `settle` seconds ago            -> one row per trace
-    insert = one transaction, ON CONFLICT DO NOTHING      -> the marker moves too
+    insert = one transaction: new traces, a pending run for every active signal whose
+             filters match each new trace, and the marker moves too
 
 Values reach the SQL as Laminar `parameters` ({name:Type} placeholders), never by
 pasting them into the query text.
-
-Adapted from the prototype's sync/poll.py. What changed: no conversation rebuilding
-(the judge reads a trace's spans itself later), so there's one Laminar query instead
-of two; traces that errored or have no session ID are stored, not skipped.
 """
 
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+
+from ..filters import FilterError, matches
 
 log = logging.getLogger("poller")
 
@@ -46,6 +46,15 @@ WHERE start_time > toDateTime64({{since:String}}, 6, 'UTC') - INTERVAL 1 HOUR
 ORDER BY end_time
 """
 
+# The current (highest-numbered) version of every active signal in the project.
+ACTIVE_VERSIONS_SQL = """
+SELECT DISTINCT ON (v.signal_id) v.signal_id, v.id, v.filters
+FROM signal_versions v
+JOIN signals s ON s.id = v.signal_id
+WHERE s.project_id = %s AND s.active
+ORDER BY v.signal_id, v.version_number DESC
+"""
+
 
 @dataclass
 class PollResult:
@@ -54,6 +63,7 @@ class PollResult:
     seen: int = 0             # root spans the query returned
     already_stored: int = 0   # re-read inside the overlap; skipped
     written: int = 0
+    runs_created: int = 0
 
 
 def poll_once(laminar, conn, project_id, *, overlap=timedelta(seconds=60),
@@ -66,7 +76,7 @@ def poll_once(laminar, conn, project_id, *, overlap=timedelta(seconds=60),
 
     roots = laminar.query(NEW_TRACES_SQL, {"since": _ch_time(since), "until": _ch_time(until)})
     result.seen = len(roots)
-    result.written = insert_traces(conn, project_id, roots)
+    result.written, result.runs_created = insert_traces(conn, project_id, roots)
     result.already_stored = result.seen - result.written
     return result
 
@@ -78,26 +88,57 @@ def read_marker(conn, project_id):
 
 
 def insert_traces(conn, project_id, roots):
-    """Insert one row per root span in one transaction; return how many were new.
+    """Store new traces and create their runs, in one transaction.
 
-    Also records the successful poll in projects.last_polled_at, in the same
-    transaction, so it only moves when the poll really finished.
+    Returns (traces written, runs created). Also records the successful poll in
+    projects.last_polled_at, so it only moves when the poll really finished.
+    A trace that was already stored is skipped entirely: its runs were created
+    when it was first stored.
     """
-    written = 0
+    written = runs = 0
     with conn.transaction(), conn.cursor() as cur:
+        cur.execute(ACTIVE_VERSIONS_SQL, (project_id,))
+        versions = cur.fetchall()
         for root in roots:
+            status = "error" if root["status"] == "error" else "success"
             cur.execute(
                 """INSERT INTO traces
                        (project_id, laminar_trace_id, session_id, started_at, ended_at, status)
                    VALUES (%s, %s, %s, %s, %s, %s)
-                   ON CONFLICT DO NOTHING""",
+                   ON CONFLICT DO NOTHING
+                   RETURNING id""",
                 (project_id, root["trace_id"], root["session_id"] or None,
                  parse_laminar_time(root["started_utc"]), parse_laminar_time(root["ended_utc"]),
-                 "error" if root["status"] == "error" else "success"),
+                 status),
             )
-            written += cur.rowcount
+            row = cur.fetchone()
+            if row is None:
+                continue
+            written += 1
+            runs += create_runs(cur, row[0], {"status": status}, versions)
         cur.execute("UPDATE projects SET last_polled_at = now() WHERE id = %s", (project_id,))
-    return written
+    return written, runs
+
+
+def create_runs(cur, trace_id, trace, versions):
+    """One pending run per signal version whose filters match the trace. Returns how many."""
+    created = 0
+    for signal_id, version_id, filters in versions:
+        try:
+            if not matches(filters, trace):
+                continue
+        except FilterError as e:
+            # One broken signal mustn't stop every poll: skip it and say so.
+            log.error("signal %s: %s; it gets no run for this trace", signal_id, e)
+            continue
+        cur.execute(
+            """INSERT INTO signal_runs (trace_id, signal_version_id)
+               VALUES (%s, %s)
+               ON CONFLICT (trace_id, signal_version_id) DO NOTHING""",
+            (trace_id, version_id),
+        )
+        created += cur.rowcount
+    return created
 
 
 def parse_laminar_time(text):
