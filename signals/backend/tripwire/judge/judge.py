@@ -18,9 +18,9 @@ def judge(laminar, trace: TraceRow, version: SignalVersion, *, event_rate: float
     findings = []
     # Same trace -> same answer every time, like the placeholder runner.
     if picked(f"event:{trace.laminar_trace_id}", event_rate):
-        findings.append(Finding(severity="warning", span_ids=[], fields={}))
+        findings.append(Finding(severity="warning", span_ids=[], fields={}, evidence_labels=["S1"]))
         if picked(f"event2:{trace.laminar_trace_id}", event_rate):
-            findings.append(Finding(severity="info", span_ids=[], fields={}))
+            findings.append(Finding(severity="info", span_ids=[], fields={}, evidence_labels=["S2"]))
 
     return JudgeResult(
         findings=findings,

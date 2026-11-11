@@ -18,13 +18,14 @@
 1. **Events from the same turn share `judge_input`.** Your summarizer should summarize *the event's
    finding* (its payload and severity), not the whole trace, or two findings from one turn will cluster
    together.
-2. **`description` might go away.** We're considering keeping all event text in the signal's own fields
-   (`payload`). Please don't make `description` required for the summarizer.
-3. **Evidence spans aren't linked to `judge_input`.** Events store real Laminar span IDs; `judge_input`
-   uses short labels. Tell us if you want the labels stored too.
+2. **`description` is nullable.** Event text lives in the signal's own fields (`payload`); the real
+   runner leaves `description` empty. Don't make it required for the summarizer.
+3. **Each event has `evidence_labels`.** The labels its finding cited, as they appear in `judge_input`
+   (e.g. `["S3"]`), so you can tell which part of a shared `judge_input` belongs to which event.
 4. **Events can arrive late.** Retries during an LLM outage can delay an event up to 24 h after its
    trace. Your pool window uses `created_at`, which handles it.
-5. **The judge's reasoning will be stored on each run**, if you want it as extra input for `cause`.
+5. **The judge's reasoning is stored on each run** (`signal_runs.analysis`), if you want it as extra
+   input for `cause`.
 
 ## Nothing changes for
 
