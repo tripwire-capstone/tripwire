@@ -1,10 +1,10 @@
 import * as p from "@clack/prompts";
-import { checkLogin } from "../checks.js";
-import { readConfig, writeConfig } from "../config.js";
-import { UserError } from "../errors.js";
-import { syncInfra } from "../infra.js";
-import { bundledInfraDir, deploymentDir } from "../paths.js";
-import { Log } from "../run.js";
+import { checkLogin } from "../aws/checks.js";
+import { readConfig, writeConfig } from "../core/config.js";
+import { UserError } from "../core/errors.js";
+import { syncInfra } from "../terraform/infra.js";
+import { bundledInfraDir, deploymentDir } from "../core/paths.js";
+import { Log } from "../core/run.js";
 import {
   deleteSnapshots,
   formatDate,
@@ -12,14 +12,11 @@ import {
   listSnapshots,
   planRotation,
   waitForSet,
-} from "../snapshots.js";
-import { applyWithProgress } from "../applyProgress.js";
-import { discardPlan, tfInit, tfPlan, tfPlanJson, writeSettings } from "../terraform.js";
-import { answer, downloadingNote, step } from "../ui.js";
-
-export interface DestroyOptions {
-  yes?: boolean;
-}
+} from "../aws/snapshots.js";
+import { applyWithProgress } from "../ui/applyProgress.js";
+import { discardPlan, tfInit, tfPlan, tfPlanJson, writeSettings } from "../terraform/terraform.js";
+import { answer, downloadingNote, step } from "../ui/ui.js";
+import type { DestroyOptions } from "../types/commands.js";
 
 export async function destroy(options: DestroyOptions): Promise<void> {
   p.intro("tripwire destroy");

@@ -6,8 +6,8 @@
 #   seed       one project, one signal (+ v1), one cluster; runs once, then exits
 #   poller     Laminar -> traces, every 10 s
 #   runner     PLACEHOLDER: traces -> runs + some events, every 5 s
-#   clusterer  events -> clusters every 10 s; PLACEHOLDER by default (CLUSTERER_MODE=real for
-#              the real loop). Has a healthcheck: `docker compose ps` shows its health.
+#   clusterer  events -> summaries -> vectors -> clusters every 10 s (needs OPENAI_API_KEY in .env;
+#              CLUSTERER_MODE=placeholder runs without OpenAI). Has a healthcheck: `docker compose ps`.
 
 x-backend: &backend
   build: .

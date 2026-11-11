@@ -11,7 +11,7 @@ match). Defaults come from docs/clustering/DESIGN.md's settings table.
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .summarize import prompt_paths
 
@@ -39,11 +39,13 @@ class ClustererSettings:
     health_failure_run: int    # CLUSTER_HEALTH_FAILURE_RUN: rule 2, this many summaries in a row failed
     health_alive_minutes: float  # CLUSTER_HEALTH_ALIVE_MINUTES: --alive fails if no pass for longer
     last_pass_file: str        # CLUSTERER_LAST_PASS_FILE: where each pass records its time (--alive)
+    # OPENAI_API_KEY: summarizer + embedder. Required in real mode; never printed (repr=False).
+    openai_api_key: str | None = field(default=None, repr=False)
 
 
 # name -> (default, type)
 DEFAULTS = {
-    "CLUSTERER_MODE": ("placeholder", str),
+    "CLUSTERER_MODE": ("real", str),
     "CLUSTERER_INTERVAL_SECONDS": (10.0, float),
     "CLUSTER_PREPARE_BATCH": (50, int),
     "CLUSTER_ASSIGN_THRESHOLD": (0.30, float),   # temporary until calibrated (Q14)
@@ -80,6 +82,7 @@ def load_settings(environ=None):
     database_url = environ.get("DATABASE_URL", "").strip()
     if not database_url:
         problems.append("DATABASE_URL is required")
+    openai_api_key = environ.get("OPENAI_API_KEY", "").strip() or None
 
     def check(condition, message):
         if not condition:
@@ -87,6 +90,9 @@ def load_settings(environ=None):
 
     mode = values["CLUSTERER_MODE"]
     check(mode in MODES, f"CLUSTERER_MODE must be one of {', '.join(MODES)}, got {mode!r}")
+    check(mode != "real" or openai_api_key,
+          "OPENAI_API_KEY is required in real mode (the summarizer and embedder call OpenAI): "
+          "set it in .env, or set CLUSTERER_MODE=placeholder to run without OpenAI")
     threshold = values["CLUSTER_ASSIGN_THRESHOLD"]
     check(0 < threshold <= 1,
           f"CLUSTER_ASSIGN_THRESHOLD must be between 0 and 1 (a cosine distance), got {threshold}")
@@ -135,4 +141,5 @@ def load_settings(environ=None):
         health_failure_run=values["CLUSTER_HEALTH_FAILURE_RUN"],
         health_alive_minutes=values["CLUSTER_HEALTH_ALIVE_MINUTES"],
         last_pass_file=values["CLUSTERER_LAST_PASS_FILE"],
+        openai_api_key=openai_api_key,
     )

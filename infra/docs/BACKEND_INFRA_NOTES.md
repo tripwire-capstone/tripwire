@@ -69,7 +69,7 @@ in `settings.py` and `signals/backend/.env.example`; set only what differs.
 
 | Variable | Default | Note |
 |---|---|---|
-| `CLUSTERER_MODE` | `placeholder` | `real` once the prepare half lands (then the default changes too) |
+| `CLUSTERER_MODE` | `real` | `placeholder` runs without OpenAI (skeleton stand-in) |
 | `CLUSTERER_INTERVAL_SECONDS` | 10 | |
 | `CLUSTER_PREPARE_BATCH` | 50 | |
 | `CLUSTER_ASSIGN_THRESHOLD` | 0.30 | temporary until calibrated; must be in (0, 1] |
@@ -85,7 +85,24 @@ in `settings.py` and `signals/backend/.env.example`; set only what differs.
 
 **Decided in:** the Clusters pair's PR 4 (decision 3, settings).
 
-## 4. Database connection for the backend services
+## 4. Clusterer: `OPENAI_API_KEY` as a secret (required)
+
+**Why.** In real mode (the default) the clusterer's prepare step calls OpenAI: it summarizes each event
+(`SUMMARIZER_MODEL`, default `gpt-6-luna`) and embeds the summary (`text-embedding-3-small`). Without the
+key, the clusterer **refuses to start** (item 3): on ECS the container exits at once and the service keeps
+restarting it, with `OPENAI_API_KEY is required in real mode` in CloudWatch Logs.
+
+**What to add.**
+- `OPENAI_API_KEY` from **Secrets Manager** via the task definition's `secrets` / `valueFrom`, never in plain
+  `environment` (same as `DATABASE_URL`'s password). The clusterer never prints it (its settings hide it).
+- Outbound HTTPS from the clusterer's tasks to `api.openai.com` (a NAT gateway or equivalent if they run in
+  private subnets).
+- If the Signals pair's runner uses OpenAI too, it can share the secret, but note that both then share the
+  key's rate limits (the clusterer backs off on its own after a rate-limit error).
+
+**Decided in:** `signals/backend/docs/clustering/DESIGN.md` ("Prepare step") and Design Notes Q21.
+
+## 5. Database connection for the backend services
 
 **Why.** Every backend service (and the clusterer's health check, which runs inside the clusterer's
 container) connects through `DATABASE_URL`. Locally that's the compose `db` container; on AWS it's RDS.
@@ -109,4 +126,5 @@ container) connects through `DATABASE_URL`. Locally that's the compose `db` cont
 | 1 | ECS `healthCheck` with `--alive` | clusterer | Yes | Clusters PR 5 |
 | 2 | CloudWatch alarm on "clustering stalled" | clusterer | Recommended | Clusters PR 5 |
 | 3 | Settings as env vars; Terraform validation matches `settings.py` | clusterer | Yes | Clusters PR 4 |
-| 4 | `DATABASE_URL` to RDS, password from Secrets Manager, pgvector | all backend services | Yes | now |
+| 4 | `OPENAI_API_KEY` from Secrets Manager; outbound HTTPS to OpenAI | clusterer | Yes | Clusters PR 3+4 |
+| 5 | `DATABASE_URL` to RDS, password from Secrets Manager, pgvector | all backend services | Yes | now |

@@ -1,17 +1,17 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import * as p from "@clack/prompts";
-import { bucketExists } from "../bootstrap.js";
-import { checkLogin } from "../checks.js";
-import { readConfig, writeConfig, type TripwireConfig } from "../config.js";
-import { publicNameServers, sameNameServers } from "../dns.js";
-import { startupRows, trackStartup, waitForLaminar, type ServiceProgress } from "../ecs.js";
-import { UserError } from "../errors.js";
-import { syncInfra } from "../infra.js";
-import { bundledInfraDir, deploymentDir } from "../paths.js";
-import { applyWithProgress, withHint, type LiveApplyOptions } from "../applyProgress.js";
-import { showProgress, type Block } from "../progressView.js";
-import { CommandError, Log } from "../run.js";
-import { formatDate, latestFinal, listSnapshots } from "../snapshots.js";
+import { bucketExists } from "../terraform/bootstrap.js";
+import { checkLogin } from "../aws/checks.js";
+import { readConfig, writeConfig } from "../core/config.js";
+import { publicNameServers, sameNameServers } from "../aws/dns.js";
+import { startupRows, trackStartup, waitForLaminar } from "../aws/ecs.js";
+import { UserError } from "../core/errors.js";
+import { syncInfra } from "../terraform/infra.js";
+import { bundledInfraDir, deploymentDir } from "../core/paths.js";
+import { applyWithProgress, withHint } from "../ui/applyProgress.js";
+import { showProgress } from "../ui/progressView.js";
+import { CommandError, Log } from "../core/run.js";
+import { formatDate, latestFinal, listSnapshots } from "../aws/snapshots.js";
 import {
   dataLosses,
   discardPlan,
@@ -23,19 +23,17 @@ import {
   tfPlanJson,
   tfState,
   writeSettings,
-  type Plan,
-} from "../terraform.js";
-import { stateBucketName, type Restore, type StackName } from "../tfvars.js";
-import { answer, downloadingNote, step } from "../ui.js";
-import { CLI_VERSION } from "../version.js";
+} from "../terraform/terraform.js";
+import { stateBucketName } from "../terraform/tfvars.js";
+import { answer, downloadingNote, step } from "../ui/ui.js";
+import { CLI_VERSION } from "../core/version.js";
+import type { DataPlan, DeployOptions, StepLabels } from "../types/commands.js";
+import type { TripwireConfig } from "../types/config.js";
+import type { ServiceProgress } from "../types/ecs.js";
+import type { Block } from "../types/progress.js";
+import type { Plan, StackName } from "../types/terraform.js";
 
 const LITE_PRICE = "about $135/mo in us-east-1, plus usage";
-
-export interface DeployOptions {
-  lite?: boolean;
-  fresh?: boolean;
-  yes?: boolean;
-}
 
 function showModes(): void {
   console.log("Choose a mode:\n");
@@ -44,15 +42,6 @@ function showModes(): void {
 }
 
 const HINT = "Run `tripwire deploy --lite` again to continue where it stopped.";
-
-interface StepLabels {
-  // Shown while planning and applying, and with its time when done
-  title: string;
-  // Shown when nothing changes; null removes the line
-  unchanged: string | null;
-  // Show the apply's groups live instead of a single spinner
-  live?: Omit<LiveApplyOptions, "title" | "hint">;
-}
 
 // Plans one stack and applies it if anything changed, as a single line (or a live block)
 async function applyStack(
@@ -186,12 +175,6 @@ async function deployPersistent(log: Log, config: TripwireConfig, yes: boolean):
     unchanged: "Domain and HTTPS certificate · unchanged",
     live: { action: "build", stack: "persistent", estimate: "usually under a minute", usualSeconds: 5 * 60 },
   });
-}
-
-interface DataPlan {
-  stackEmpty: boolean;
-  restore?: Restore;
-  summary: string;
 }
 
 // Whether the stack is empty, and what data it starts with

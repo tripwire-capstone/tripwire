@@ -15,6 +15,7 @@ each deploy or destroy, because a login that expires mid-run stops it.
 ```bash
 npm --prefix cli install
 npm --prefix cli test
+npm --prefix cli run typecheck   # type-checks the code and the tests (tsx runs tests without checking)
 ```
 
 ## Commands (run from the repo root)

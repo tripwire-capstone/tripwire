@@ -5,9 +5,9 @@ import { deploy } from "./commands/deploy.js";
 import { destroy } from "./commands/destroy.js";
 import { init } from "./commands/init.js";
 import { addUser, listUsers, removeUser } from "./commands/users.js";
-import { UserError } from "./errors.js";
-import { CommandError } from "./run.js";
-import { CLI_VERSION } from "./version.js";
+import { UserError } from "./core/errors.js";
+import { CommandError } from "./core/run.js";
+import { CLI_VERSION } from "./core/version.js";
 
 const program = new Command();
 

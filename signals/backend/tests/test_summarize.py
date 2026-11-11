@@ -22,6 +22,7 @@ from tripwire.clusterer.summarize import (
     Row,
     build_messages,
     decide,
+    field_descriptions,
     load_event,
     load_prompt,
     save,
@@ -39,7 +40,7 @@ def event(**overrides):
         event_id=1, signal_name="Failure", instruction="Flag wrong or unhelpful results.",
         field_descriptions={"reason": "what went wrong"}, severity="critical",
         payload={"reason": "told the user a closed trail is open"}, description=None,
-        evidence_labels=None, judge_input="[S1] user: is Mist Trail open?\n[S5] assistant: yes")
+        evidence_labels=[], judge_input="[S1] user: is Mist Trail open?\n[S5] assistant: yes")
     return replace(base, **overrides)
 
 
@@ -79,7 +80,7 @@ def test_a_closing_tag_inside_the_trace_still_leaves_the_finding_last():
 
 
 def test_optional_parts_are_left_out_when_missing():
-    text = user_message(build_messages(event(description=None, evidence_labels=None), "sys"))
+    text = user_message(build_messages(event(description=None, evidence_labels=[]), "sys"))
     assert "description:" not in text and "evidence:" not in text and "None" not in text
 
 
@@ -95,6 +96,18 @@ def test_empty_field_shows_as_empty_and_undescribed_field_still_renders():
                                              field_descriptions={"reason": "", "count": ""}), "sys"))
     assert "- reason: (empty)" in text and "- count: 3" in text
     assert "- reason\n" in text                 # listed in the Signal block without a description
+
+
+def test_field_descriptions_read_the_signals_field_list():
+    schema = [{"name": "reason", "type": "string", "description": "why the user is frustrated"},
+              {"name": "level", "type": "enum", "choices": ["low", "high"]}]
+    assert field_descriptions(schema) == {"reason": "why the user is frustrated", "level": ""}
+
+
+def test_field_descriptions_warn_on_any_other_shape(caplog):
+    with caplog.at_level("WARNING"):
+        assert field_descriptions({"type": "object", "properties": {"reason": {}}}) == {}
+    assert "isn't a list of fields" in caplog.text
 
 
 # ------------------------------------------------------------------ prompt files (Q19)
@@ -191,8 +204,8 @@ def test_price_counts_cached_reads_and_cache_writes_and_skips_unknown_models():
 def make_event(conn, payload=None, description="judge's text", instruction="Flag frustration."):
     signal_id, version_id = add_signal(conn)
     conn.execute("UPDATE signal_versions SET instruction = %s, output_schema = %s WHERE id = %s",
-                 (instruction, json.dumps({"type": "object", "properties": {
-                     "reason": {"type": "string", "description": "why"}}}), version_id))
+                 (instruction, json.dumps([{"name": "reason", "type": "string", "description": "why",
+                                            "nullable": False}]), version_id))
     trace_id = conn.execute(
         """INSERT INTO traces (project_id, laminar_trace_id, started_at, ended_at, status)
            VALUES ((SELECT id FROM projects LIMIT 1), gen_random_uuid(),
@@ -207,6 +220,21 @@ def make_event(conn, payload=None, description="judge's text", instruction="Flag
         (run_id, trace_id, version_id, description,
          json.dumps(payload or {"reason": "user repeats the party size"}))).fetchone()[0]
     return signal_id, version_id, event_id
+
+
+def test_load_event_reads_the_evidence_labels_and_they_reach_the_prompt(conn):
+    _, _, event_id = make_event(conn)
+    conn.execute("UPDATE signal_events SET evidence_labels = %s WHERE id = %s", (["S3", "S5"], event_id))
+    loaded = load_event(conn, event_id)
+    assert loaded.evidence_labels == ["S3", "S5"]
+    assert "evidence: [S3], [S5]" in user_message(build_messages(loaded, "sys"))
+
+
+def test_an_event_without_labels_gets_no_evidence_line(conn):
+    _, _, event_id = make_event(conn)              # the column defaults to an empty list
+    loaded = load_event(conn, event_id)
+    assert loaded.evidence_labels == []
+    assert "evidence:" not in user_message(build_messages(loaded, "sys"))
 
 
 def test_load_event_uses_the_version_that_judged_the_event_not_the_latest(conn):

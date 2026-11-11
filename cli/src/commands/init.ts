@@ -9,18 +9,20 @@ import {
   listUserZones,
   recordTypesAt,
   zoneNameServers,
-  type Zone,
-} from "../aws.js";
-import { adoptStateBucket } from "../bootstrap.js";
-import { checkTerraform, describeIdentity, getCallerIdentity } from "../checks.js";
-import { configPath, readConfig, writeConfig, type TripwireConfig } from "../config.js";
-import { publicNameServers, sameNameServers } from "../dns.js";
-import { UserError } from "../errors.js";
-import { hostnameProblem, isInZone, normalizeHostname, suggestHostname } from "../hostname.js";
-import { syncInfra } from "../infra.js";
-import { bundledInfraDir, deploymentDir } from "../paths.js";
-import { Log } from "../run.js";
-import { answer, step } from "../ui.js";
+} from "../aws/aws.js";
+import { adoptStateBucket } from "../terraform/bootstrap.js";
+import { checkTerraform, describeIdentity, getCallerIdentity } from "../aws/checks.js";
+import { configPath, readConfig, writeConfig } from "../core/config.js";
+import { publicNameServers, sameNameServers } from "../aws/dns.js";
+import { UserError } from "../core/errors.js";
+import { hostnameProblem, isInZone, normalizeHostname, suggestHostname } from "../aws/hostname.js";
+import { syncInfra } from "../terraform/infra.js";
+import { bundledInfraDir, deploymentDir } from "../core/paths.js";
+import { Log } from "../core/run.js";
+import { answer, step } from "../ui/ui.js";
+import type { Zone } from "../types/aws.js";
+import type { DnsProvider, DomainChoice } from "../types/commands.js";
+import type { TripwireConfig } from "../types/config.js";
 
 const REGIONS = ["us-east-1", "us-east-2", "us-west-2", "eu-west-1", "eu-central-1"];
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -49,18 +51,11 @@ async function askRegion(log: Log, current?: string): Promise<string> {
   );
 }
 
-type DnsProvider = "route53" | "cloudflare" | "other";
-
 const PROVIDER_NAMES: Record<DnsProvider, string> = {
   route53: "Route 53 (this AWS account)",
   cloudflare: "Cloudflare",
   other: "Another DNS provider",
 };
-
-interface DomainChoice {
-  domain: string;
-  zoneId: string | null;
-}
 
 // Stops unless public DNS already uses this Route 53 zone; otherwise the certificate never validates
 async function checkZoneIsLive(log: Log, zone: Zone): Promise<void> {
