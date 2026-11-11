@@ -34,6 +34,7 @@ import psycopg
 from dotenv import load_dotenv
 
 from .settings import SettingsError, load_settings
+from .sql import unfinished
 
 log = logging.getLogger("clusterer")
 
@@ -41,15 +42,13 @@ log = logging.getLogger("clusterer")
 UNHEALTHY_PREFIX = "clustering unhealthy:"
 
 # Rule 1: the oldest live event that has waited too long and isn't finished.
-STALLED_EVENT_SQL = """
+STALLED_EVENT_SQL = f"""
 SELECT sig_event.id, floor(extract(epoch FROM now() - sig_event.created_at) / 60)::int
 FROM signal_events sig_event
 JOIN signal_runs run ON run.id = sig_event.run_id
 WHERE run.source = 'live'
   AND sig_event.created_at < now() - make_interval(mins => %s)
-  AND NOT EXISTS (SELECT 1 FROM event_embeddings embedded WHERE embedded.event_id = sig_event.id)
-  AND NOT EXISTS (SELECT 1 FROM event_summaries summary
-                  WHERE summary.event_id = sig_event.id AND summary.status = 'failed')
+  AND {unfinished("sig_event.id")}
 ORDER BY sig_event.created_at, sig_event.id
 LIMIT 1
 """

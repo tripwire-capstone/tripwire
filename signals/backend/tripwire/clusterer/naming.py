@@ -21,6 +21,8 @@ Implementation choices (decided Nov 11, reasons in the work log and the PR):
 
 import logging
 
+from .sql import leaf_cluster
+
 log = logging.getLogger("clusterer")
 
 # Recompute centers from all members. A cluster with no members left (every trace deleted)
@@ -42,13 +44,13 @@ WHERE clusters.id = member_average.id
 
 # For each unnamed leaf cluster: the summary of its closest member that has a finished summary.
 # Ties go to the lower event ID, so the choice never depends on row order.
-NAME_CANDIDATES_SQL = """
+NAME_CANDIDATES_SQL = f"""
 SELECT DISTINCT ON (unnamed.id) unnamed.id, unnamed.signal_id, summary.summary
 FROM clusters unnamed
 JOIN cluster_members member ON member.cluster_id = unnamed.id
 JOIN event_embeddings embedded ON embedded.event_id = member.event_id
 JOIN event_summaries summary ON summary.event_id = member.event_id AND summary.status = 'done'
-WHERE unnamed.name IS NULL AND unnamed.level = 0 AND unnamed.centroid IS NOT NULL
+WHERE unnamed.name IS NULL AND {leaf_cluster("unnamed")} AND unnamed.centroid IS NOT NULL
 ORDER BY unnamed.id, embedded.embedding <=> unnamed.centroid, member.event_id
 """
 

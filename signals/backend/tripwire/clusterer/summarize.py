@@ -19,6 +19,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from .llm_client import LLMBadOutput, LLMError, LLMInputTooLong, LLMRefused, LLMServiceError, Usage
+from .sql import event_signal
 
 log = logging.getLogger("clusterer.summarize")
 
@@ -64,11 +65,12 @@ class EventInput:
     judge_input: str
 
 
-LOAD_EVENT_SQL = """
+# The version joined is the one that judged THIS event (shared rule: sql.event_signal).
+LOAD_EVENT_SQL = f"""
 SELECT e.id, s.name, v.instruction, v.output_schema, e.severity, e.payload, e.description,
        e.judge_input
 FROM signal_events e
-JOIN signal_versions v ON v.id = e.signal_version_id   -- the version that judged THIS event
+{event_signal("e", "v")}
 JOIN signals s ON s.id = v.signal_id
 WHERE e.id = %s
 """

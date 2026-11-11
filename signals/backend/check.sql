@@ -18,6 +18,8 @@ GROUP BY p.id ORDER BY p.id;
 SELECT count(*) AS waiting FROM traces t
 WHERE NOT EXISTS (SELECT 1 FROM signal_runs r WHERE r.trace_id = t.id);
 
+-- "In the pool" = embedded and not in a cluster. Keep in step with in_the_pool() in
+-- tripwire/clusterer/sql.py (a plain SQL file can't import it).
 \echo '== Per signal: runs, events, clustered, in the pool'
 SELECT s.name,
        count(DISTINCT r.id) AS runs,
