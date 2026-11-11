@@ -20,6 +20,11 @@ Implementation choices (decided Nov 10, reasons in the PR):
     same function step 5 uses (Nov 11), so the formula is written once.
   * One transaction per Signal. An error in one Signal is logged and the others carry on, so a
     Signal with bad data can't stop every other Signal from getting new clusters.
+  * Grouping keeps the plain threshold, even once assign gets its LLM middle band (Q7, later): the
+    bands are part of the *join* rule. Grouping compares every pool pair, far too many for LLM calls,
+    and SciPy takes a single cutoff (decided Nov 11).
+  * SciPy's metric must stay "cosine", the same as pgvector's <=> in assign and naming, or the two
+    would disagree about what the threshold means (tests/test_distance_guards.py checks they agree).
 """
 
 import json
@@ -30,6 +35,7 @@ import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
 
 from .naming import update_centers
+from .sql import event_signal, in_the_pool
 
 log = logging.getLogger("clusterer")
 
@@ -44,16 +50,14 @@ class PoolEvent:
 
 # Pool events inside the window, with their Signal and conversation. Ordered so every pass
 # sees the same events in the same order.
-POOL_SQL = """
+POOL_SQL = f"""
 SELECT pool_event.event_id, sig_version.signal_id, trace.session_id, trace.id,
        pool_event.embedding::text
 FROM event_embeddings pool_event
 JOIN signal_events sig_event ON sig_event.id = pool_event.event_id
-JOIN signal_versions sig_version ON sig_version.id = sig_event.signal_version_id
+{event_signal("sig_event", "sig_version")}
 JOIN traces trace ON trace.id = sig_event.trace_id
-WHERE NOT EXISTS (
-    SELECT 1 FROM cluster_members member WHERE member.event_id = pool_event.event_id
-)
+WHERE {in_the_pool("pool_event")}
   AND sig_event.created_at >= now() - make_interval(days => %s)
 ORDER BY sig_version.signal_id, pool_event.event_id
 """
