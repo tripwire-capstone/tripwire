@@ -82,7 +82,8 @@ def find_nearest(conn):
 def assign_pool(conn, threshold):
     """Decide for every pool event, then apply all the joins in one transaction.
 
-    Returns how many events joined a cluster. Doesn't move any center (that's step 5).
+    Returns the joins (one Candidate per event that joined), so the caller knows which clusters
+    gained members: step 5 recomputes only those centers. Doesn't move any center itself.
     """
     with conn.transaction():
         joins = [
@@ -91,7 +92,7 @@ def assign_pool(conn, threshold):
             if decide(candidate.distance, threshold) is Decision.JOIN
         ]
         if not joins:
-            return 0
+            return []
         with conn.cursor() as cursor:
             cursor.executemany(
                 """INSERT INTO cluster_members (event_id, cluster_id, distance)
@@ -102,4 +103,4 @@ def assign_pool(conn, threshold):
                 "UPDATE clusters SET updated_at = now() WHERE id = ANY(%s)",
                 (sorted({join.cluster_id for join in joins}),),
             )
-    return len(joins)
+    return joins

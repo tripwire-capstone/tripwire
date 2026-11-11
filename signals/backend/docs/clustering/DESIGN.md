@@ -37,8 +37,12 @@ One `clusterer` process (exactly one copy, per CONTRACT.md). Each pass, in order
    of events). A new cluster gets its center (the average of its members) when it's created, so the
    next pass's assign can use it; step 5 updates centers after joins. One transaction per Signal: an
    error in one Signal is logged and the others carry on.
-4. **Name** new clusters.
-5. **Update cluster centers.**
+4. **Name** new clusters (Q10). The name comes from the closest member *that has a summary*; if none
+   has one, the name stays empty and is tried again next pass. A repeated name within one Signal gets
+   a number ("... (2)").
+5. **Update cluster centers**: only clusters that gained members in step 2 (assign returns them),
+   recomputed as the average of all their members. A crash before this step leaves a center slightly
+   stale until that cluster's next join.
 
 Then sleep `CLUSTERER_INTERVAL_SECONDS` (default 10).
 
@@ -55,7 +59,7 @@ Then sleep `CLUSTERER_INTERVAL_SECONDS` (default 10).
 | Q7 | **Join rule (Friday):** nearest cluster center (same Signal) within `CLUSTER_ASSIGN_THRESHOLD` (cosine distance) → join; else the event waits in the pool. One `assign()` function with distance bands (close joins, far waits, middle band uses the threshold for now). **Later:** an LLM decides the middle band. | Simple and testable; the LLM step builds on it without throwaway. |
 | Q8 | **New clusters:** group pool events with the **same distance rule** as Q7 (average linkage, as in the prototype). A group becomes a cluster at ≥ `CLUSTER_MIN_EVENTS` events (default 3) from ≥ `CLUSTER_MIN_CONVERSATIONS` conversations (default 2). Conversation = `traces.session_id`; no session ID → each trace is its own conversation. | Fewer noise clusters; settings can reproduce the prototype's 2 / 2 rule. |
 | Q9 | **Pool window:** only pool events created within `CLUSTER_POOL_WINDOW_DAYS` (default 14) can form clusters, measured from **when the event was created** (not trace time, so backfilled events can still cluster). | Avoids clusters of long-fixed problems; bounds grouping cost. |
-| Q10 | **Naming (Friday):** a new cluster's name = the `summary` of its member closest to the center. No LLM call. **Later:** LLM naming together with name refresh (#20). | Can't fail, never an "Unnamed cluster". |
+| Q10 | **Naming (Friday):** a new cluster's name = the `summary` of its member closest to the center (skipping members without a finished summary). No LLM call. Named **once**; a repeated name within a Signal gets "(2)", "(3)". **Later:** LLM naming together with name refresh (#20). | Can't fail, never an "Unnamed cluster". |
 | Q11 | **Failures:** event's own failures (bad output) → up to 3 attempts with growing waits, then `failed` with the error. Service problems (timeouts, rate limits, outages) → wait and retry **without using attempts**; the wait is per event (`not_before`, growing, capped), as the runner does (Signals S7), so one rate-limited call doesn't stall the batch. "Input too long" or a **refusal** → `failed` at once (a retry gets the same answer). Unlike the runner's 24 h give-up, a summary never gives up on a service problem; the health check (Q12) flags the stall instead. Each step commits on its own. A command re-queues failed events. No leases or claiming (single clusterer). | Failures recorded; outages heal themselves; never pays twice for a finished step. |
 | Q12 | **UI:** an unclustered event shows only as gray "not in a cluster" (waiting, unclustered and failed look the same, like Laminar's "Unclustered"). Failures live in `event_summaries` + logs. **Health check unhealthy** when an unfinished event is older than `CLUSTER_HEALTH_STALL_MINUTES` (default 15) **or** the last `CLUSTER_HEALTH_FAILURE_RUN` events (default 10) all failed. | Catches the one critical case: clustering silently stopping. |
 | Q13 | **One loop** (above). "Decide then apply": all joining decisions in a pass use the centers as they stood at the start of the pass, then are applied together (prototype's shuffle test proves order-independence). Split into two workers later only if backfill testing shows the loop can't keep up. | Fewest moving parts; steps already communicate through tables. |
@@ -115,6 +119,10 @@ Signals pair owns.
 - Team: who builds the cluster API endpoints and the cluster view for Friday?
 - Backfill counting rule (Q6): count traces, not events, or only the newest version's event per trace?
 - Signal version markers on the Events chart.
+- **Stale names and near-duplicate clusters:** a name is fixed when a cluster forms, but its center keeps
+  moving, so a later cluster can form where the first one used to be and get the same name (shown as
+  "(2)"). Nothing in the MVP renames or merges clusters. Should a rebuild (#19) merge near-duplicates?
+  Laminar refreshes names as membership changes; Raindrop lets a person mark an issue as a duplicate.
 
 ## Laminar reference (what's documented)
 
