@@ -46,6 +46,20 @@ One `clusterer` process (exactly one copy, per CONTRACT.md). Each pass, in order
 
 Then sleep `CLUSTERER_INTERVAL_SECONDS` (default 10).
 
+**Running the loop** (`tripwire/clusterer/loop.py`, `__main__.py`):
+- **Each step stands alone:** a failing step is logged and the pass carries on with the remaining
+  steps; it's retried next pass. Safe because steps communicate through the tables; the only hand-off
+  in memory is assign → centers (if assign fails, step 5 has nothing to do).
+- **Autocommit connection**, opened fresh each pass, so each step's save commits on its own and a
+  dropped connection heals next pass.
+- **`CLUSTERER_MODE`:** `placeholder` (default, the skeleton's fixed embeddings) or `real` (steps 1-5).
+  Until the prepare half's `prepare_events()` lands, real mode's step 1 is a do-nothing stand-in
+  (`prepare_stand_in()`), so real mode only clusters events that already have embeddings. When it lands:
+  call it from the stand-in and make `real` the default.
+- **Settings** are read and checked once at startup (`settings.py`, the only place defaults live;
+  `.env.example` matches, checked by a test). A bad value stops the clusterer with a message, which on
+  ECS shows as an unhealthy service with the message in the logs.
+
 ## Decisions
 
 | # | Decision | Why (short) |
@@ -76,6 +90,7 @@ Then sleep `CLUSTERER_INTERVAL_SECONDS` (default 10).
 
 | Variable | Default | Decision |
 |---|---|---|
+| `CLUSTERER_MODE` | `placeholder` (`real` once the prepare half lands) | Running the loop |
 | `CLUSTERER_INTERVAL_SECONDS` | 10 | Q13 |
 | `CLUSTER_PREPARE_BATCH` | 50 | Q13 |
 | `CLUSTER_ASSIGN_THRESHOLD` | 0.30 (temporary until calibrated) | Q7, Q14 |
