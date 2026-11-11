@@ -16,6 +16,7 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc",
+    "typecheck": "tsc -p tsconfig.test.json",
     "test": "tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {

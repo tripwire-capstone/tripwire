@@ -1,23 +1,21 @@
 import * as p from "@clack/prompts";
-import { bucketExists } from "../bootstrap.js";
-import { checkLogin } from "../checks.js";
-import { readConfig, writeConfig, type TripwireConfig } from "../config.js";
-import { UserError } from "../errors.js";
-import { syncInfra } from "../infra.js";
-import { bundledInfraDir, deploymentDir } from "../paths.js";
-import { Log, run } from "../run.js";
-import { discardPlan, findResource, tfApply, tfInit, tfPlan, tfState, writeSettings } from "../terraform.js";
-import { stateBucketName } from "../tfvars.js";
-import { answer, step } from "../ui.js";
-import { hasUser, normalizeEmail, withoutUser, withUser } from "../users.js";
+import { bucketExists } from "../terraform/bootstrap.js";
+import { checkLogin } from "../aws/checks.js";
+import { readConfig, writeConfig } from "../core/config.js";
+import { UserError } from "../core/errors.js";
+import { syncInfra } from "../terraform/infra.js";
+import { bundledInfraDir, deploymentDir } from "../core/paths.js";
+import { Log, run } from "../core/run.js";
+import { discardPlan, findResource, tfApply, tfInit, tfPlan, tfState, writeSettings } from "../terraform/terraform.js";
+import { stateBucketName } from "../terraform/tfvars.js";
+import { answer, step } from "../ui/ui.js";
+import { hasUser, normalizeEmail, withoutUser, withUser } from "../core/users.js";
+import type { RemoveOptions } from "../types/commands.js";
+import type { TripwireConfig } from "../types/config.js";
 
 // Only the Cognito users change; nothing else in the stack is planned
 const USERS_TARGET = "-target=aws_cognito_user.laminar";
 const POOL = "aws_cognito_user_pool.main";
-
-export interface RemoveOptions {
-  yes?: boolean;
-}
 
 async function loadConfig(): Promise<TripwireConfig> {
   const config = await readConfig();
