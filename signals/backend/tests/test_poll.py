@@ -160,3 +160,74 @@ def test_failed_poll_leaves_marker_and_last_polled_at_alone(conn):
         poll_once(DownLaminar(), conn, PROJECT, now=NOW)
     assert conn.execute("SELECT last_polled_at FROM projects").fetchone()[0] is None
     assert stored(conn) == []
+
+# ------------------------------------------------------------------ fan-out
+
+
+def add_signal(conn, name, filters="[]", active=True, versions=1):
+    signal_id = conn.execute(
+        "INSERT INTO signals (project_id, name, active) VALUES (%s, %s, %s) RETURNING id",
+        (PROJECT, name, active)).fetchone()[0]
+    for n in range(1, versions + 1):
+        conn.execute(
+            """INSERT INTO signal_versions (signal_id, version_number, instruction, output_schema,
+                                            filters, model)
+               VALUES (%s, %s, 'x', '[]', %s, 'm')""", (signal_id, n, filters))
+    return signal_id
+
+
+def runs(conn):
+    return conn.execute("""SELECT s.name, v.version_number, r.status FROM signal_runs r
+                           JOIN signal_versions v ON v.id = r.signal_version_id
+                           JOIN signals s ON s.id = v.signal_id
+                           ORDER BY s.name""").fetchall()
+
+
+def test_new_trace_gets_a_pending_run_per_active_signal(conn):
+    add_signal(conn, "A")
+    add_signal(conn, "B")
+    result = poll_once(FakeLaminar([root(TRACES[0])]), conn, PROJECT, now=NOW)
+    assert result.runs_created == 2
+    assert runs(conn) == [("A", 1, "pending"), ("B", 1, "pending")]
+
+
+def test_run_uses_the_current_version(conn):
+    add_signal(conn, "A", versions=3)
+    poll_once(FakeLaminar([root(TRACES[0])]), conn, PROJECT, now=NOW)
+    assert runs(conn) == [("A", 3, "pending")]
+
+
+def test_filters_decide_which_signals_run(conn):
+    add_signal(conn, "errors only", filters='[{"field": "status", "op": "eq", "value": "error"}]')
+    poll_once(FakeLaminar([root(TRACES[0], status="success"), root(TRACES[1], status="error")]),
+              conn, PROJECT, now=NOW)
+    assert conn.execute("""SELECT t.status FROM signal_runs r
+                           JOIN traces t ON t.id = r.trace_id""").fetchall() == [("error",)]
+
+
+def test_inactive_signal_gets_no_runs(conn):
+    add_signal(conn, "off", active=False)
+    assert poll_once(FakeLaminar([root(TRACES[0])]), conn, PROJECT, now=NOW).runs_created == 0
+
+
+def test_re_reading_a_trace_creates_no_more_runs(conn):
+    add_signal(conn, "A")
+    laminar = FakeLaminar([root(TRACES[0])])
+    poll_once(laminar, conn, PROJECT, now=NOW)
+    assert poll_once(laminar, conn, PROJECT, now=NOW).runs_created == 0
+    assert len(runs(conn)) == 1
+
+
+def test_signal_created_later_gets_no_runs_for_old_traces(conn):
+    laminar = FakeLaminar([root(TRACES[0])])
+    poll_once(laminar, conn, PROJECT, now=NOW)
+    add_signal(conn, "late")
+    poll_once(laminar, conn, PROJECT, now=NOW)
+    assert runs(conn) == []
+
+
+def test_broken_filter_skips_only_that_signal(conn):
+    add_signal(conn, "broken", filters='[{"field": "nope", "op": "eq", "value": 1}]')
+    add_signal(conn, "fine")
+    poll_once(FakeLaminar([root(TRACES[0])]), conn, PROJECT, now=NOW)
+    assert runs(conn) == [("fine", 1, "pending")]

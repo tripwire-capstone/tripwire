@@ -14,9 +14,13 @@ def event_id(conn):
     """One real signal_events row, made by the seed and the placeholder runner."""
     seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh", key_hint="abcd")
     project = conn.execute("SELECT id FROM projects WHERE name = 'default'").fetchone()[0]
-    conn.execute("""INSERT INTO traces (project_id, laminar_trace_id, started_at, ended_at, status)
-                    VALUES (%s, %s, now() - interval '1 minute', now(), 'success')""",
-                 (project, str(uuid.uuid4())))
+    trace_id = conn.execute(
+        """INSERT INTO traces (project_id, laminar_trace_id, started_at, ended_at, status)
+           VALUES (%s, %s, now() - interval '1 minute', now(), 'success') RETURNING id""",
+        (project, str(uuid.uuid4()))).fetchone()[0]
+    # The poller creates a pending run for each new trace; the runner only finishes it.
+    conn.execute("INSERT INTO signal_runs (trace_id, signal_version_id) SELECT %s, id FROM signal_versions",
+                 (trace_id,))
     run_step(conn, 1.0)
     return conn.execute("SELECT id FROM signal_events").fetchone()[0]
 
