@@ -78,8 +78,9 @@ def poll_project(conn, project_id, name, api_url, api_key, lookback, settle):
     laminar = LaminarSQL(api_key=api_key, api_url=api_url)
     try:
         r = poll_once(laminar, conn, project_id, first_run_lookback=lookback, settle=settle)
-        log.info("project %s: since %s, %d root spans, %d already stored, %d written",
-                 name, r.since.isoformat(timespec="seconds"), r.seen, r.already_stored, r.written)
+        log.info("project %s: since %s, %d root spans, %d already stored, %d written, %d runs created",
+        name, r.since.isoformat(timespec="seconds"), r.seen, r.already_stored, r.written,
+        r.runs_created)
     except LaminarError as e:
         # Laminar unreachable or the key was refused: nothing was written, the marker
         # didn't move, and the next poll tries again.
