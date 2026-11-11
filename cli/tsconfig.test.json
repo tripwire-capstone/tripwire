@@ -1,0 +1,11 @@
+{
+  // Type-checks everything, tests included. tsconfig.json leaves tests out so they aren't built
+  // into dist/, which also kept them from being type-checked (tsx runs them without checking).
+  // Run with: npm run typecheck
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src"],
+  "exclude": []
+}
