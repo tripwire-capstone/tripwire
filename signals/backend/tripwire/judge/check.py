@@ -4,10 +4,14 @@ from tripwire.judge.render import Rendered
 from tripwire.judge.types import Finding
 
 
+JUDGE_MAX_FINDINGS = 5
+SEVERITY_RANK = {"critical": 0, "warning": 1, "info": 2}
+
+
 def check_findings(
     raw_findings: list[dict], rendered: Rendered
 ) -> tuple[list[Finding], int]:
-    """Resolve citations in schema-validated findings and count uncited findings."""
+    """Resolve citations, count uncited findings, and cap the result by severity."""
     findings = []
     dropped_findings = 0
     for raw_finding in raw_findings:
@@ -26,5 +30,10 @@ def check_findings(
                 evidence_labels=evidence_labels,
             )
         )
+
+    if len(findings) > JUDGE_MAX_FINDINGS:
+        findings = sorted(
+            findings, key=lambda finding: SEVERITY_RANK[finding.severity]
+        )[:JUDGE_MAX_FINDINGS]
 
     return findings, dropped_findings
