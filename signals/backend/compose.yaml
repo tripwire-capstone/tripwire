@@ -6,7 +6,8 @@
 #   seed       one project, one signal (+ v1), one cluster; runs once, then exits
 #   poller     Laminar -> traces, every 10 s
 #   runner     PLACEHOLDER: traces -> runs + some events, every 5 s
-#   clusterer  PLACEHOLDER: events -> embeddings + some cluster links, every 10 s
+#   clusterer  events -> clusters every 10 s; PLACEHOLDER by default (CLUSTERER_MODE=real for
+#              the real loop). Has a healthcheck: `docker compose ps` shows its health.
 
 x-backend: &backend
   build: .
@@ -59,6 +60,15 @@ services:
   clusterer:
     <<: *backend
     command: python -m tripwire.clusterer
+    # Q12's rules ("is clustering working?"); `docker compose ps` shows healthy / unhealthy.
+    # Compose only displays this, it never restarts. On AWS, ECS runs `--alive` instead, because
+    # ECS restarts on failure (infra/docs/BACKEND_INFRA_NOTES.md). Keep the timing the same there.
+    healthcheck:
+      test: ["CMD", "python", "-m", "tripwire.clusterer.health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
 volumes:
   pgdata:

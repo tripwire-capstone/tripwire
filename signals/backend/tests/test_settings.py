@@ -103,3 +103,20 @@ def test_load_settings_rejects_a_prompt_version_with_no_prompt_files():
     message = problem_with(SUMMARIZER_PROMPT_VERSION=12)
     assert "SUMMARIZER_PROMPT_VERSION=12 has no prompt files" in message
     assert "summarize_v12.md" in message
+
+def test_load_settings_has_health_defaults():
+    settings = load_settings(BASE)
+    assert (settings.health_stall_minutes, settings.health_failure_run) == (15, 10)
+    assert settings.health_alive_minutes == 3
+    assert settings.last_pass_file == "/tmp/clusterer-last-pass"
+
+
+def test_load_settings_rejects_health_counts_below_one():
+    for name in ("CLUSTER_HEALTH_STALL_MINUTES", "CLUSTER_HEALTH_FAILURE_RUN"):
+        assert f"{name} must be at least 1, got 0" in problem_with(**{name: 0})
+
+
+def test_load_settings_rejects_alive_window_shorter_than_one_pass():
+    # --alive would fail between every two passes.
+    message = problem_with(CLUSTER_HEALTH_ALIVE_MINUTES=0.1, CLUSTERER_INTERVAL_SECONDS=10)
+    assert "CLUSTER_HEALTH_ALIVE_MINUTES must allow more time than one CLUSTERER_INTERVAL_SECONDS" in message

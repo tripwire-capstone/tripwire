@@ -60,6 +60,19 @@ Then sleep `CLUSTERER_INTERVAL_SECONDS` (default 10).
   `.env.example` matches, checked by a test). A bad value stops the clusterer with a message, which on
   ECS shows as an unhealthy service with the message in the logs.
 
+**Health** (`tripwire/clusterer/health.py`, Q12): two separate checks, because they need different
+responses.
+- **"Is the clusterer alive?"** `python -m tripwire.clusterer.health --alive`. Every pass (even a failed
+  one) records its time in `CLUSTERER_LAST_PASS_FILE`; `--alive` fails when no pass has finished for
+  `CLUSTER_HEALTH_ALIVE_MINUTES`. Only a frozen loop fails it, and a restart fixes that, so **ECS runs
+  this one** and restarts the task on failure.
+- **"Is clustering working?"** `python -m tripwire.clusterer.health` (Q12's two rules). A restart fixes
+  none of their usual causes (OpenAI down, expired key, prepare bug, database down, backlog), so the loop
+  **logs them as warnings** starting with `clustering unhealthy:` (once when they start, every 5 minutes
+  while they last, once when they clear) for a CloudWatch alarm on AWS. **Compose runs this one**, since
+  it only displays health.
+- **Infrastructure needed** (ECS `healthCheck`, CloudWatch alarm): `infra/docs/BACKEND_INFRA_NOTES.md`.
+
 ## Decisions
 
 | # | Decision | Why (short) |
@@ -75,7 +88,7 @@ Then sleep `CLUSTERER_INTERVAL_SECONDS` (default 10).
 | Q9 | **Pool window:** only pool events created within `CLUSTER_POOL_WINDOW_DAYS` (default 14) can form clusters, measured from **when the event was created** (not trace time, so backfilled events can still cluster). | Avoids clusters of long-fixed problems; bounds grouping cost. |
 | Q10 | **Naming (Friday):** a new cluster's name = the `summary` of its member closest to the center (skipping members without a finished summary). No LLM call. Named **once**; a repeated name within a Signal gets "(2)", "(3)". **Later:** LLM naming together with name refresh (#20). | Can't fail, never an "Unnamed cluster". |
 | Q11 | **Failures:** event's own failures (bad output) → up to 3 attempts with growing waits, then `failed` with the error. Service problems (timeouts, rate limits, outages) → wait and retry **without using attempts**; the wait is per event (`not_before`, growing, capped), as the runner does (Signals S7), so one rate-limited call doesn't stall the batch. "Input too long" or a **refusal** → `failed` at once (a retry gets the same answer). Unlike the runner's 24 h give-up, a summary never gives up on a service problem; the health check (Q12) flags the stall instead. Each step commits on its own. A command re-queues failed events. No leases or claiming (single clusterer). | Failures recorded; outages heal themselves; never pays twice for a finished step. |
-| Q12 | **UI:** an unclustered event shows only as gray "not in a cluster" (waiting, unclustered and failed look the same, like Laminar's "Unclustered"). Failures live in `event_summaries` + logs. **Health check unhealthy** when an unfinished event is older than `CLUSTER_HEALTH_STALL_MINUTES` (default 15) **or** the last `CLUSTER_HEALTH_FAILURE_RUN` events (default 10) all failed. | Catches the one critical case: clustering silently stopping. |
+| Q12 | **UI:** an unclustered event shows only as gray "not in a cluster" (waiting, unclustered and failed look the same, like Laminar's "Unclustered"). Failures live in `event_summaries` + logs. **Health check unhealthy** when an unfinished **live** event is older than `CLUSTER_HEALTH_STALL_MINUTES` (default 15) **or** the last `CLUSTER_HEALTH_FAILURE_RUN` summaries (default 10) all failed. Backfill events don't count toward the first rule: they're prepared after live ones by design (#14), so they may wait (Nov 11). | Catches the one critical case: clustering silently stopping. |
 | Q13 | **One loop** (above). "Decide then apply": all joining decisions in a pass use the centers as they stood at the start of the pass, then are applied together (prototype's shuffle test proves order-independence). Split into two workers later only if backfill testing shows the loop can't keep up. | Fewest moving parts; steps already communicate through tables. |
 | Q14 | **Tests:** fake summarizer (scripted output; simulates timeout, broken output, too long, refusal, outage) and fake embedder; two events from one run (same `judge_input`, different `payload`) must get different prompts, each with its own payload; grouping tests **place vectors at exact distances** for boundary tests. **Calibration:** park_demo through the real judge, summarizer and embedder, scored by `report.py` (reworked for these tables); sweep the threshold (e.g. 0.20–0.40). If real events aren't ready by Friday, ship `0.30`, labeled temporary. | Exact, free, repeatable tests; calibration on the only traffic with answer keys. |
 
@@ -101,6 +114,8 @@ Then sleep `CLUSTERER_INTERVAL_SECONDS` (default 10).
 | `CLUSTER_HEALTH_FAILURE_RUN` | 10 | Q12 |
 | `SUMMARIZER_MODEL` | `gpt-6-luna` | Q3, Q4; summarizer below |
 | `SUMMARIZER_PROMPT_VERSION` | 1 (needs `prompts/summarize_v1.md` + `.schema.json`) | summarizer below |
+| `CLUSTER_HEALTH_ALIVE_MINUTES` | 3 | Q12 (`--alive`) |
+| `CLUSTERER_LAST_PASS_FILE` | `/tmp/clusterer-last-pass` | Q12 (`--alive`) |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` (1536 dims, one model only) | existing |
 
 ## Summarizer (PR 2, decided Nov 10-11)
