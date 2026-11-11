@@ -13,6 +13,8 @@ match). Defaults come from docs/clustering/DESIGN.md's settings table.
 import os
 from dataclasses import dataclass
 
+from .summarize import prompt_paths
+
 MODES = ("placeholder", "real")
 
 
@@ -31,6 +33,8 @@ class ClustererSettings:
     min_conversations: int     # CLUSTER_MIN_CONVERSATIONS (Q8)
     pool_window_days: int      # CLUSTER_POOL_WINDOW_DAYS (Q9)
     stub_cluster_rate: float   # STUB_CLUSTER_RATE: placeholder mode only
+    summarizer_model: str      # SUMMARIZER_MODEL: the model that writes event summaries (Q19)
+    summarizer_prompt_version: int  # SUMMARIZER_PROMPT_VERSION: which prompts/summarize_vN to use
     health_stall_minutes: int  # CLUSTER_HEALTH_STALL_MINUTES: rule 1, a live event waiting longer (Q12)
     health_failure_run: int    # CLUSTER_HEALTH_FAILURE_RUN: rule 2, this many summaries in a row failed
     health_alive_minutes: float  # CLUSTER_HEALTH_ALIVE_MINUTES: --alive fails if no pass for longer
@@ -47,6 +51,8 @@ DEFAULTS = {
     "CLUSTER_MIN_CONVERSATIONS": (2, int),
     "CLUSTER_POOL_WINDOW_DAYS": (14, int),
     "STUB_CLUSTER_RATE": (0.5, float),
+    "SUMMARIZER_MODEL": ("gpt-6-luna", str),
+    "SUMMARIZER_PROMPT_VERSION": (1, int),
     "CLUSTER_HEALTH_STALL_MINUTES": (15, int),
     "CLUSTER_HEALTH_FAILURE_RUN": (10, int),
     "CLUSTER_HEALTH_ALIVE_MINUTES": (3.0, float),
@@ -105,6 +111,11 @@ def load_settings(environ=None):
     check(0 <= values["STUB_CLUSTER_RATE"] <= 1,
           f"STUB_CLUSTER_RATE must be between 0 and 1, got {values['STUB_CLUSTER_RATE']}")
 
+    version = values["SUMMARIZER_PROMPT_VERSION"]
+    missing = [path.name for path in prompt_paths(version) if not path.exists()]
+    check(not missing, f"SUMMARIZER_PROMPT_VERSION={version} has no prompt files "
+                       f"(missing {', '.join(missing)} in tripwire/clusterer/prompts/)")
+
     if problems:
         raise SettingsError("clusterer settings are invalid:\n  - " + "\n  - ".join(problems))
 
@@ -118,6 +129,8 @@ def load_settings(environ=None):
         min_conversations=values["CLUSTER_MIN_CONVERSATIONS"],
         pool_window_days=values["CLUSTER_POOL_WINDOW_DAYS"],
         stub_cluster_rate=values["STUB_CLUSTER_RATE"],
+        summarizer_model=values["SUMMARIZER_MODEL"],
+        summarizer_prompt_version=version,
         health_stall_minutes=values["CLUSTER_HEALTH_STALL_MINUTES"],
         health_failure_run=values["CLUSTER_HEALTH_FAILURE_RUN"],
         health_alive_minutes=values["CLUSTER_HEALTH_ALIVE_MINUTES"],

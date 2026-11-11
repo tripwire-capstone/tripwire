@@ -1,6 +1,7 @@
 # Pinned so everyone (and the AWS image build) installs exactly the same versions.
 httpx==0.28.1
 numpy==2.5.4        # needed by scipy; the clusterer's vectors
+openai==3.49.0       # summarizer calls (clusterer, prepare half)
 psycopg[binary]==3.3.8
 python-dotenv==1.2.3
 pytest==9.1.1
