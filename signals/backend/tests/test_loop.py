@@ -25,7 +25,7 @@ TOLERANCE = 1e-5
 
 
 def real_settings(**overrides):
-    environ = {"DATABASE_URL": "postgresql://unused", "CLUSTERER_MODE": "real"}
+    environ = {"DATABASE_URL": "postgresql://unused", "CLUSTERER_MODE": "real", "OPENAI_API_KEY": "test-key"}
     environ.update({name: str(value) for name, value in overrides.items()})
     return load_settings(environ)
 

@@ -20,7 +20,7 @@ from tripwire.clusterer.settings import load_settings
 
 
 def settings_for_tests(**overrides):
-    environ = {"DATABASE_URL": "postgresql://unused"}
+    environ = {"DATABASE_URL": "postgresql://unused", "OPENAI_API_KEY": "test-key"}
     environ.update({name: str(value) for name, value in overrides.items()})
     return load_settings(environ)
 
@@ -193,6 +193,7 @@ def test_main_alive_exits_0_after_a_recent_pass(tmp_path, monkeypatch, capsys):
     path = tmp_path / "last-pass"
     record_pass(path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("CLUSTERER_LAST_PASS_FILE", str(path))
     assert main(["--alive"]) == 0
     assert capsys.readouterr().out.startswith("alive:")
@@ -200,6 +201,7 @@ def test_main_alive_exits_0_after_a_recent_pass(tmp_path, monkeypatch, capsys):
 
 def test_main_alive_exits_1_before_any_pass(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("CLUSTERER_LAST_PASS_FILE", str(tmp_path / "missing"))
     assert main(["--alive"]) == 1
     assert "unhealthy: no clusterer pass has finished yet" in capsys.readouterr().out
@@ -207,6 +209,7 @@ def test_main_alive_exits_1_before_any_pass(tmp_path, monkeypatch, capsys):
 
 def test_main_exits_1_when_the_database_is_unreachable(monkeypatch, capsys):
     monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/nothing")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     assert main([]) == 1
     assert f"{UNHEALTHY_PREFIX} can't reach the database" in capsys.readouterr().out
 

@@ -1,11 +1,10 @@
 """The clusterer: python -m tripwire.clusterer
 
 Two modes, chosen by CLUSTERER_MODE (decided Nov 11):
-  * placeholder (default): the skeleton's stand-in. Gives every new event a fixed embedding and
+  * real (default since the prepare half landed): steps 1-5 (prepare, assign, group, name,
+    centers) every CLUSTERER_INTERVAL_SECONDS. Needs OPENAI_API_KEY (summarizer + embedder).
+  * placeholder: the skeleton's stand-in, no OpenAI. Gives every new event a fixed embedding and
     links some to the seeded cluster, so data keeps flowing end to end.
-  * real: steps 1-5 (prepare, assign, group, name, centers) every CLUSTERER_INTERVAL_SECONDS.
-    Prepare is a do-nothing stand-in until the prepare half's prepare_events() lands, so until
-    then real mode only clusters events that already have embeddings.
 
 Every setting is read and checked once at startup (settings.py); a bad value stops the clusterer
 with a message saying what's wrong. Stops cleanly on Ctrl-C or SIGTERM (docker stop / ECS).
@@ -24,7 +23,10 @@ from dotenv import load_dotenv
 from ..placeholder import run_forever
 from .cluster import cluster_step
 from .health import UnhealthyReporter, check_clustering, record_pass
-from .loop import open_connection, run_pass
+from .embed import OpenAIEmbedder
+from .llm_client import OpenAIClient
+from .loop import open_connection, prepare_stand_in, run_pass
+from .prepare import Preparer
 from .settings import SettingsError, load_settings
 
 log = logging.getLogger("clusterer")
@@ -47,13 +49,14 @@ def placeholder_pass(settings, reporter):
                  embedded, linked, embedded - linked)
 
 
-def real_pass(settings, reporter):
+def real_pass(settings, reporter, prepare=prepare_stand_in):
     # A fresh connection each pass, so a dropped connection heals on the next pass.
     with open_connection(settings.database_url) as conn:
-        result = run_pass(conn, settings)
+        result = run_pass(conn, settings, prepare=prepare)
         report_health(conn, settings, reporter)
     if result.anything_happened():
-        log.info("clusterer pass: %d joined, %d new clusters, %d named, %d centers updated%s",
+        log.info("clusterer pass: prepared %s, %d joined, %d new clusters, %d named, "
+                 "%d centers updated%s", result.prepared or "nothing",
                  result.joined, result.created, result.named, result.centers_updated,
                  f"; failed steps: {', '.join(result.failed_steps)}" if result.failed_steps else "")
 
@@ -81,7 +84,16 @@ def main():
 
     log.info("clusterer starting in %s mode (threshold %.2f, every %gs)",
              settings.mode, settings.assign_threshold, settings.interval_seconds)
-    one_pass = real_pass if settings.mode == "real" else placeholder_pass
+    if settings.mode == "real":
+        # Built once: it keeps the OpenAI clients and its skip list between passes (Q21).
+        preparer = Preparer(OpenAIClient(settings.openai_api_key),
+                            OpenAIEmbedder(settings.openai_api_key),
+                            settings.summarizer_model, settings.summarizer_prompt_version)
+
+        def one_pass(settings_used, reporter_used):
+            real_pass(settings_used, reporter_used, prepare=preparer.prepare_events)
+    else:
+        one_pass = placeholder_pass
     reporter = UnhealthyReporter()
     run_forever(lambda: tick(one_pass, settings, reporter), settings.interval_seconds, "clusterer")
 

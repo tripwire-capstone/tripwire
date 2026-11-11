@@ -61,14 +61,14 @@ class EventInput:
     severity: str
     payload: dict
     description: str | None           # may be dropped by the Signals pair: optional here
-    evidence_labels: list | None      # their column doesn't exist yet: always None for now
+    evidence_labels: list             # labels the finding cited in judge_input, e.g. ["S3"] (Signals S25)
     judge_input: str
 
 
 # The version joined is the one that judged THIS event (shared rule: sql.event_signal).
 LOAD_EVENT_SQL = f"""
 SELECT e.id, s.name, v.instruction, v.output_schema, e.severity, e.payload, e.description,
-       e.judge_input
+       e.judge_input, e.evidence_labels
 FROM signal_events e
 {event_signal("e", "v")}
 JOIN signals s ON s.id = v.signal_id
@@ -80,19 +80,23 @@ def load_event(conn, event_id):
     row = conn.execute(LOAD_EVENT_SQL, (event_id,)).fetchone()
     if row is None:
         raise LookupError(f"signal event {event_id} not found")
-    event_id, name, instruction, output_schema, severity, payload, description, judge_input = row
+    event_id, name, instruction, output_schema, severity, payload, description, judge_input, labels = row
     return EventInput(event_id, name, instruction, field_descriptions(output_schema), severity,
-                      payload or {}, description, None, judge_input)
+                      payload or {}, description, list(labels or []), judge_input)
 
 
 def field_descriptions(output_schema):
-    """Field name -> description from a version's output schema. Never fails on an odd shape:
-    the schema's exact format isn't final, and a missing description just means none is shown."""
-    properties = output_schema.get("properties") if isinstance(output_schema, dict) else None
-    if not isinstance(properties, dict):
+    """Field name -> description, from a version's output_schema.
+
+    The format is a list of fields, [{name, type, description, choices, nullable}] (Signals S20).
+    Anything else is logged as a warning and gives no descriptions: the summary still works, but
+    the warning makes the gap visible (an earlier version silently returned nothing here).
+    """
+    if not isinstance(output_schema, list):
+        log.warning("output_schema isn't a list of fields (Signals S20); field descriptions left out")
         return {}
-    return {name: (spec.get("description") or "") if isinstance(spec, dict) else ""
-            for name, spec in properties.items()}
+    return {field["name"]: field.get("description") or ""
+            for field in output_schema if isinstance(field, dict) and field.get("name")}
 
 
 def build_messages(event, system_prompt):
@@ -201,6 +205,20 @@ def _after_error(error, row, now):
                          *totals, finished_at=None)
     # Out of attempts, or too long / refused: a retry would get the same answer.
     return RowUpdate("failed", None, None, attempts, None, kind, message, *totals, finished_at=now)
+
+
+def crash_update(row, error, now):
+    """What the row becomes when OUR code crashed on this event (migration 004, Design Notes Q21).
+
+    `failed` with error_kind 'crashed' and the error, so the event counts as finished, isn't retried
+    (or paid for) again by accident, and comes back with the re-queue SQL once the bug is fixed.
+    Totals are unchanged: if the crash came after a paid call, its usage was never reported.
+    """
+    row = row or Row()
+    message = f"{type(error).__name__}: {error}"[:1000]
+    return RowUpdate("failed", None, None, row.attempts + 1, None, "crashed", message,
+                     row.input_tokens, row.cached_input_tokens, row.output_tokens, row.cost_usd,
+                     finished_at=now)
 
 
 def _add_usage(row, usage):
