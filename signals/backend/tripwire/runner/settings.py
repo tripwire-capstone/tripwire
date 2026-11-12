@@ -32,6 +32,8 @@ class Settings:
     def check(self):
         """A judge call can take two Laminar queries, a model call and one repair. If that can
         outlast the lease, another thread would claim the run and it would be judged twice."""
+        if min(self.fetch_timeout_seconds, self.model_timeout_seconds) <= 0:
+            raise ValueError("Judge fetch and model timeouts must be positive")
         needed = 2 * self.fetch_timeout_seconds + 2 * self.model_timeout_seconds + 30
         if self.lease_seconds < needed:
             raise ValueError(f"RUNNER_LEASE_SECONDS is {self.lease_seconds}; the judge's time limits "

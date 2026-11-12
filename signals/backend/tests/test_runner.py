@@ -7,10 +7,17 @@ import pytest
 from tripwire.judge.types import Finding, JudgeError, JudgeResult, Usage
 from tripwire.runner import jobs
 from tripwire.runner.settings import Settings
-from tripwire.runner.worker import LaminarClients, backoff_seconds, work_once
+from tripwire.runner.worker import backoff_seconds, work_once
 
 SETTINGS = Settings()
-CLIENTS = LaminarClients("test-key", 10)   # fakes never use it
+
+
+class UnusedClients:
+    def get(self, api_url):
+        return None
+
+
+CLIENTS = UnusedClients()
 
 
 def add_run(conn, *, active=True, source="live"):
