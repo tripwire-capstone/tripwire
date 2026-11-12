@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict
 
 from ..judge.judge import judge
 from ..judge.types import JudgeError, SignalVersion, TraceRow
-from ..poller.laminar import LaminarSQL
+from ..judge.laminar import JudgeLaminarSQL
 from .db import get_conn
 from .validate import normalize_fields, problems
 
@@ -400,14 +400,12 @@ def test_run(body: TestRunIn, conn=Depends(get_conn), judge_fn=Depends(get_judge
     version = SignalVersion(id=None, signal_id=None, name=body.definition.name.strip(),
                             instruction=d["instruction"], critical_guidance=d["critical_guidance"],
                             output_schema=d["output_schema"], model=d["model"])
-    laminar = LaminarSQL(os.environ.get("LMNR_PROJECT_API_KEY", ""), row[6],
-                         timeout=int(os.environ.get("JUDGE_FETCH_TIMEOUT_SECONDS", 10)), retries=0)
+        # The judge's own client: deadline-bound, no retries, and the judge closes it.
+    laminar = JudgeLaminarSQL(os.environ.get("LMNR_PROJECT_API_KEY", ""), row[6])
     try:
         result = judge_fn(laminar, trace, version)
     except JudgeError as e:
         raise HTTPException(503 if e.retryable else 422, f"the judge couldn't finish: {e}")
-    finally:
-        laminar.close()
     u = result.usage
     return TestRunOut(
         findings=[FindingOut(severity=f.severity, fields=f.fields, evidence_labels=f.evidence_labels,
