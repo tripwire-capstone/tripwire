@@ -1,37 +1,52 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
-  Anchor, Badge, Box, Breadcrumbs, Button, Checkbox, CloseButton, Drawer, Group, Kbd, Menu, Pagination, Paper,
+  Alert, Anchor, Badge, Box, Breadcrumbs, Button, Checkbox, CloseButton, Drawer, Group, Kbd, Menu, Pagination, Paper,
   SegmentedControl, Stack, Table, Text, TextInput, Title, Tooltip, UnstyledButton,
 } from '@mantine/core';
-import { useStoryData } from '../components/StoryClock';
+import { FEATURES, editSignal, setActive, testRun, useEvents, useRuns, useSignal } from '../api';
 import { SeverityBadge, KindBadge, StatusBadge } from '../components/Badges';
 import { TimeBarChart } from '../components/Charts';
 import TimeRangePicker from '../components/TimeRangePicker';
 import PageHeader from '../components/PageHeader';
 import TripwireForm from '../components/TripwireForm';
 import { formatTime, formatRelative, formatCost, shortId, plural } from '../components/format';
-import { tripwireListUrl, laminarTraceUrl } from '../components/links';
+import { tripwireListUrl } from '../components/links';
 import { rangeFromParams, bucketMinutesFor, makeBuckets, bucketIndex, shortLabel } from '../components/timeRange';
-import { clusterColor, cssColor, UNCLUSTERED_COLOR, RUN_COLORS } from '../theme';
+import { cssColor, UNCLUSTERED_COLOR, RUN_COLORS } from '../theme';
 
-// Tripwire detail, modeled on Laminar's Signal page: Events, Runs and Settings tabs with a time range.
-// Address: /signals/<id>?tab=&cluster=&event=&pastHours=&pageNumber=&severity=&version=...
+// A signal's page, modeled on Laminar's Signal page: Events, Runs and Settings tabs with a time range.
+// Address: /signals/<id>?tab=&event=&pastHours=&pageNumber=&severity=...
+// Reads the real API. Clusters and app versions are hidden until they have endpoints (src/api/features.js).
 
 const PAGE_SIZE = 25;
 const DEFAULT_HOURS = 72; // a signal's page opens on the past 3 days
 const SEVERITIES = ['critical', 'warning', 'info'];
 
+// "Now" in the pages' time format (UTC, no zone). Read once, and again when Refresh is clicked.
+const currentTime = () => new Date().toISOString().slice(0, 19);
+
 export default function TripwireDetail() {
   const { id } = useParams();
   const [params, setParams] = useSearchParams();
-  const data = useStoryData();
-  const tripwire = data.getTripwire(id);
+  const { data: tripwire, error, loading, reload } = useSignal(id);
+  const [now, setNow] = useState(currentTime);
+  const [notice, setNotice] = useState('');
+  const [toggling, setToggling] = useState(false);
 
-  if (!tripwire) {
+  if (!tripwire && loading) return <Text c="dimmed">Loading…</Text>;
+  if (!tripwire && (error?.status === 404 || error?.status === 422)) {
     return (
       <PageHeader title="Signal not found" description={`There's no signal "${id}".`}
         actions={<Button component={Link} to={tripwireListUrl()}>All signals</Button>} />
+    );
+  }
+  if (!tripwire) {
+    return (
+      <Alert color="red" title="Couldn't load this signal">
+        <Group justify="space-between"><Text size="sm">{error?.message}</Text>
+          <Button variant="light" color="gray" onClick={reload}>Try again</Button></Group>
+      </Alert>
     );
   }
 
@@ -43,88 +58,90 @@ export default function TripwireDetail() {
     if (!('pageNumber' in changes)) next.delete('pageNumber');
     setParams(next);
   };
+  const refresh = () => setNow(currentTime());
+
+  async function toggleActive() {
+    setToggling(true);
+    try {
+      const saved = await setActive(tripwire.id, tripwire.status !== 'active');
+      setNotice(saved.status === 'active' ? 'Signal turned on: it judges new traces again.' : 'Signal turned off: new traces get no runs.');
+      reload();
+    } catch (e) {
+      setNotice(`Couldn't change it: ${e.message}`);
+    } finally {
+      setToggling(false);
+    }
+  }
+
+  function saved(signal) {
+    setNotice(`Saved. ${signal.name} is on version ${signal.versionNumber}.`);
+    reload();
+  }
 
   return (
     <Stack gap="md">
-      <Group gap="xs" align="baseline">
-        <Breadcrumbs separator="/">
-          <Anchor component={Link} to={tripwireListUrl()} c="dimmed" size="lg">Signals</Anchor>
-          <Title order={3}>{tripwire.name}</Title>
-        </Breadcrumbs>
-        <KindBadge kind={tripwire.kind} />
-        <StatusBadge status={tripwire.status} />
+      <Group justify="space-between">
+        <Group gap="xs" align="baseline">
+          <Breadcrumbs separator="/">
+            <Anchor component={Link} to={tripwireListUrl()} c="dimmed" size="lg">Signals</Anchor>
+            <Title order={3}>{tripwire.name}</Title>
+          </Breadcrumbs>
+          <KindBadge kind={tripwire.kind} />
+          <StatusBadge status={tripwire.status} />
+        </Group>
+        <Button variant="light" color="gray" size="xs" loading={toggling} onClick={toggleActive}>
+          {tripwire.status === 'active' ? 'Turn off' : 'Turn on'}
+        </Button>
       </Group>
+      {notice && <Text role="status" size="sm" c="dimmed">{notice}</Text>}
 
       <Group gap="sm">
         <SegmentedControl value={tab} onChange={(v) => update({ tab: v === 'events' ? null : v, event: null, section: null })}
           data={[{ value: 'events', label: 'Events' }, { value: 'runs', label: 'Runs' }, { value: 'settings', label: 'Settings' }]} />
-        {tab !== 'settings' && <TimeRangePicker defaultHours={DEFAULT_HOURS} />}
+        {tab !== 'settings' && <TimeRangePicker defaultHours={DEFAULT_HOURS} now={now} />}
       </Group>
 
-      {tab === 'events' && <EventsTab tripwire={tripwire} params={params} update={update} />}
-      {tab === 'runs' && <RunsTab tripwire={tripwire} params={params} update={update} />}
-      {tab === 'settings' && <SettingsTab tripwire={tripwire} params={params} update={update} />}
-
-      <EventDrawer tripwire={tripwire} eventId={params.get('event')} update={update} />
+      {tab === 'events' && <EventsTab tripwire={tripwire} params={params} update={update} now={now} onRefresh={refresh} />}
+      {tab === 'runs' && <RunsTab tripwire={tripwire} params={params} update={update} now={now} onRefresh={refresh} />}
+      {tab === 'settings' && <SettingsTab tripwire={tripwire} params={params} update={update} onSaved={saved} />}
     </Stack>
   );
 }
 
+function LoadError({ error }) {
+  return error ? <Alert color="red" title="Couldn't load">{error.message}</Alert> : null;
+}
+
 // ---------------------------------------------------------------- Events tab
 
-function EventsTab({ tripwire, params, update }) {
-  const data = useStoryData();
-  const range = rangeFromParams(params, data.asOf, DEFAULT_HOURS);
-  const inRange = data.eventsBetween(tripwire.id, range.start, range.end);
+function EventsTab({ tripwire, params, update, now, onRefresh }) {
+  const range = rangeFromParams(params, now, DEFAULT_HOURS);
+  const { data, error, loading } = useEvents(tripwire.id, range);
+  const inRange = data ?? [];
 
-  // Selected cluster (ignored if it doesn't exist or belongs to another tripwire).
-  const selectedParam = params.get('cluster');
-  const selected = selectedParam && data.getCluster(selectedParam)?.tripwireId === tripwire.id ? data.getCluster(selectedParam) : null;
-  const top = selected ? data.getCluster(selected.parentId ?? selected.id) : null;
-
-  // The strip shows top-level clusters, or the sub-clusters of the selected one. Sized by events in range.
-  const countIn = (clusterId) => { const ids = data.leafIdsOf(clusterId); return inRange.filter((e) => ids.includes(e.clusterId)).length; };
-  const stripClusters = (top ? data.subClusters(top.id) : data.topClusters(tripwire.id))
-    .map((c) => ({ ...c, count: countIn(c.id) })).filter((c) => c.count > 0).sort((a, b) => b.count - a.count)
-    .map((c, i) => ({ ...c, color: clusterColor(i) }));
-  const topCount = data.topClusters(tripwire.id).filter((c) => countIn(c.id) > 0).length;
-
-  // Events shown: in range, in the selected cluster, matching filters and search.
+  // Events shown: in range, matching filters and search.
   const severity = params.get('severity');
-  const version = params.get('version');
   const [search, setSearch] = useState('');
   const shown = inRange.filter((e) => {
-    if (selected && !data.leafIdsOf(selected.id).includes(e.clusterId)) return false;
     if (severity && e.severity !== severity) return false;
-    if (version && e.appVersion !== version) return false;
     if (search) {
-      const hay = [e.severity, e.traceId, e.id, ...Object.values(e.payload)].join(' ').toLowerCase();
+      const hay = [e.severity, e.traceId, e.id, ...e.evidenceLabels, ...Object.values(e.payload)].join(' ').toLowerCase();
       if (!hay.includes(search.toLowerCase())) return false;
     }
     return true;
   });
 
-  // Chart: one stacked series per strip cluster (+ "Not in a cluster" at the top level).
+  // Chart: one series until clusters have an endpoint; then one series per cluster (FEATURES.clusterCounts).
   const minutes = bucketMinutesFor(range.hours);
   const buckets = makeBuckets(range.start, range.end, minutes);
-  const seriesOf = (e) => {
-    if (!e.clusterId) return 'unclustered';
-    const c = stripClusters.find((s) => data.leafIdsOf(s.id).includes(e.clusterId));
-    return c ? c.id : null;
-  };
-  const series = [
-    ...stripClusters.map((c) => ({ name: c.id, label: c.name, color: c.color })),
-    ...(top ? [] : [{ name: 'unclustered', label: 'Not in a cluster', color: UNCLUSTERED_COLOR }]),
-  ];
-  const chartEvents = inRange.filter((e) => (selected ? data.leafIdsOf(selected.id).includes(e.clusterId) : true));
-  const rows = buckets.map((b) => Object.fromEntries([['bucket', b.start], ...series.map((s) => [s.name, 0])]));
-  for (const e of chartEvents) {
-    const i = bucketIndex(buckets, e.time); const s = seriesOf(e);
-    if (i >= 0 && s && rows[i][s] !== undefined) rows[i][s] += 1;
+  const series = [{ name: 'events', label: 'Events', color: UNCLUSTERED_COLOR }];
+  const rows = buckets.map((b) => ({ bucket: b.start, events: 0 }));
+  for (const e of inRange) {
+    const i = bucketIndex(buckets, e.time);
+    if (i >= 0) rows[i].events += 1;
   }
-  const markers = versionMarkers(data.versions, buckets);
 
-  // Table columns: time, severity, the tripwire's own payload fields, trace, id.
+  // Table columns: time, severity, the signal's own fields, trace, id.
   const allColumns = [
     { key: 'time', label: 'Timestamp' }, { key: 'severity', label: 'Severity', w: 110 },
     ...tripwire.payloadFields.map((f) => ({ key: `payload.${f.name}`, label: f.name, payload: f.name })),
@@ -135,33 +152,22 @@ function EventsTab({ tripwire, params, update }) {
   const page = Math.max(0, Number(params.get('pageNumber')) || 0);
   const pageRows = shown.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const openEventId = params.get('event');
+  const openEvent = inRange.find((e) => String(e.id) === openEventId) ?? null;
 
-  const filterGroups = [
-    { key: 'severity', label: 'Severity', options: SEVERITIES },
-    { key: 'version', label: 'App version', options: data.versions.map((v) => v.version) },
-  ];
+  const filterGroups = [{ key: 'severity', label: 'Severity', options: SEVERITIES }];
 
   return (
     <Stack gap="sm">
-      <ClusterStrip clusters={stripClusters} selectedId={selected?.id} onSelect={(c) => update({ cluster: c.id, event: null })} />
-      <Group gap={6}>
-        <Text size="sm" c="dimmed">Event clusters</Text>
-        <Text size="sm" c="dimmed">·</Text>
-        <UnstyledButton onClick={() => update({ cluster: null })}>
-          <Text size="sm" fw={600}>{plural(topCount, 'cluster')}</Text>
-        </UnstyledButton>
-        {top && <><Text size="sm" c="dimmed">›</Text>
-          <UnstyledButton onClick={() => update({ cluster: top.id })}><Text size="sm" fw={selected?.id === top.id ? 600 : 400}>{top.name}</Text></UnstyledButton></>}
-        {selected && selected.parentId && <><Text size="sm" c="dimmed">›</Text><Text size="sm" fw={600}>{selected.name}</Text></>}
-        {selected && <CloseButton size="sm" aria-label="Show all clusters" onClick={() => update({ cluster: null })} />}
-      </Group>
+      {FEATURES.clusterCounts && <ClusterStrip clusters={[]} onSelect={(c) => update({ cluster: c.id, event: null })} />}
+      <LoadError error={error} />
 
       <Paper withBorder p="md">
-        <TimeBarChart data={rows} series={series} minutes={minutes} markers={markers} h={190} />
+        <TimeBarChart data={rows} series={series} minutes={minutes} markers={[]} h={190} />
       </Paper>
 
-      <Toolbar filterGroups={filterGroups} params={params} update={update} columns={allColumns} hidden={hidden} setHidden={setHidden} />
-      <SearchBox value={search} onChange={setSearch} placeholder="Search events by payload, severity, trace id, and more…" />
+      <Toolbar filterGroups={filterGroups} params={params} update={update} columns={allColumns} hidden={hidden}
+        setHidden={setHidden} onRefresh={onRefresh} />
+      <SearchBox value={search} onChange={setSearch} placeholder="Search events by fields, severity, trace id, evidence…" />
 
       <Table.ScrollContainer minWidth={900}>
         <Table highlightOnHover verticalSpacing="sm">
@@ -172,38 +178,47 @@ function EventsTab({ tripwire, params, update }) {
             {pageRows.length === 0 && (
               <Table.Tr><Table.Td colSpan={columns.length}>
                 <Text ta="center" c="dimmed" py="md">
-                  {inRange.length === 0 ? `No events in the last ${range.absolute ? 'selected range' : shortLabel(range.hours)}` : 'No events match these filters'}
+                  {loading ? 'Loading…'
+                    : inRange.length === 0 ? `No events in the last ${range.absolute ? 'selected range' : shortLabel(range.hours)}`
+                      : 'No events match these filters'}
                 </Text>
               </Table.Td></Table.Tr>
             )}
             {pageRows.map((e) => (
-              <Table.Tr key={e.id} onClick={() => update({ event: e.id, pageNumber: String(page) })} style={{ cursor: 'pointer' }}
-                bg={e.id === openEventId ? 'var(--mantine-color-dark-5)' : undefined}>
-                {columns.map((c) => <Table.Td key={c.key} style={c.payload ? { maxWidth: 460 } : undefined}>{eventCell(c, e, data.asOf)}</Table.Td>)}
+              <Table.Tr key={e.id} onClick={() => update({ event: String(e.id), pageNumber: String(page) })} style={{ cursor: 'pointer' }}
+                bg={String(e.id) === openEventId ? 'var(--mantine-color-dark-5)' : undefined}>
+                {columns.map((c) => <Table.Td key={c.key} style={c.payload ? { maxWidth: 460 } : undefined}>{eventCell(c, e, now)}</Table.Td>)}
               </Table.Tr>
             ))}
           </Table.Tbody>
         </Table>
       </Table.ScrollContainer>
       <Paging total={shown.length} page={page} update={update} />
+
+      <EventDrawer tripwire={tripwire} event={openEvent} now={now} update={update} />
     </Stack>
   );
+}
+
+function TraceLink({ traceId, url }) {
+  return url ? (
+    <Anchor href={url} target="_blank" rel="noreferrer" size="sm" ff="monospace"
+      onClick={(ev) => ev.stopPropagation()} style={{ whiteSpace: 'nowrap' }}>{shortId(traceId, 13)} ↗</Anchor>
+  ) : <Text size="sm" ff="monospace">{shortId(traceId, 13)}</Text>;
 }
 
 function eventCell(column, e, now) {
   switch (column.key) {
     case 'time': return <Tooltip label={formatTime(e.time)}><Text size="sm" style={{ whiteSpace: 'nowrap' }}>{formatRelative(e.time, now)}</Text></Tooltip>;
     case 'severity': return <SeverityBadge severity={e.severity} />;
-    case 'trace': return (
-      <Anchor href={laminarTraceUrl(e.traceId)} target="_blank" rel="noreferrer" size="sm" ff="monospace"
-        onClick={(ev) => ev.stopPropagation()} style={{ whiteSpace: 'nowrap' }}>{shortId(e.traceId, 13)} ↗</Anchor>
-    );
-    case 'id': return <Text size="sm" ff="monospace" c="dimmed">{shortId(e.id)}</Text>;
+    case 'trace': return <TraceLink traceId={e.traceId} url={e.laminarUrl} />;
+    case 'id': return <Text size="sm" ff="monospace" c="dimmed">{e.id}</Text>;
     default: return <Text size="sm" lineClamp={3}>{String(e.payload[column.payload] ?? '—')}</Text>;
   }
 }
 
-// Colored bars, one per cluster, sized by event count (Laminar's cluster strip).
+// Colored bars, one per cluster, sized by event count (Laminar's cluster strip). Shown when
+// FEATURES.clusterCounts is on and the clusters endpoint fills `clusters`.
 function ClusterStrip({ clusters, selectedId, onSelect }) {
   if (clusters.length === 0) {
     return <Text size="sm" c="dimmed">No clusters in this time range.</Text>;
@@ -226,33 +241,27 @@ function ClusterStrip({ clusters, selectedId, onSelect }) {
   );
 }
 
-// Version markers: where the app version changed (the first version ever seen isn't a change).
-function versionMarkers(versions, buckets) {
-  return versions
-    .slice(1)
-    .map((v) => ({ v, i: bucketIndex(buckets, v.firstSeenAt) }))
-    .filter(({ i }) => i >= 0)
-    .map(({ v, i }) => ({ at: buckets[i].start, label: v.version }));
-}
-
 // ---------------------------------------------------------------- Runs tab
 
-function RunsTab({ tripwire, params, update }) {
-  const data = useStoryData();
-  const range = rangeFromParams(params, data.asOf, DEFAULT_HOURS);
-  const inRange = data.runsBetween(tripwire.id, range.start, range.end);
+const RUN_STATUSES = ['completed', 'failed', 'pending', 'running'];
+
+function RunsTab({ tripwire, params, update, now, onRefresh }) {
+  const range = rangeFromParams(params, now, DEFAULT_HOURS);
+  const { data, error, loading } = useRuns(tripwire.id, range);
+  const inRange = data ?? [];
   const [search, setSearch] = useState('');
   const status = params.get('status');
   const source = params.get('source');
   const outcome = params.get('outcome');
-  const outcomeOf = (r) => (r.status === 'failed' ? 'failed' : r.eventId ? 'event' : 'noEvent');
+  // Unfinished runs (pending, running) aren't in the chart yet.
+  const outcomeOf = (r) => (r.status === 'failed' ? 'failed' : r.status !== 'completed' ? null : r.events ? 'event' : 'noEvent');
 
   const shown = inRange.filter((r) => {
     if (status && r.status !== status) return false;
     if (source && r.source !== source) return false;
-    if (outcome && (outcome === 'event') !== Boolean(r.eventId)) return false;
+    if (outcome && (outcome === 'event') !== r.events > 0) return false;
     if (search) {
-      const hay = [r.status, r.source, r.id, r.traceId, r.eventId ?? ''].join(' ').toLowerCase();
+      const hay = [r.status, r.source, r.id, r.traceId, r.error ?? ''].join(' ').toLowerCase();
       if (!hay.includes(search.toLowerCase())) return false;
     }
     return true;
@@ -266,29 +275,35 @@ function RunsTab({ tripwire, params, update }) {
     { name: 'failed', label: 'Failed', color: RUN_COLORS.failed },
   ];
   const rows = buckets.map((b) => ({ bucket: b.start, event: 0, noEvent: 0, failed: 0 }));
-  for (const r of shown) { const i = bucketIndex(buckets, r.time); if (i >= 0) rows[i][outcomeOf(r)] += 1; }
+  for (const r of shown) {
+    const i = bucketIndex(buckets, r.time);
+    const o = outcomeOf(r);
+    if (i >= 0 && o) rows[i][o] += 1;
+  }
 
   const allColumns = [
-    { key: 'status', label: 'Status' }, { key: 'source', label: 'Source' }, { key: 'event', label: 'Event' },
-    { key: 'clusters', label: 'Clusters' }, { key: 'cost', label: 'Cost' }, { key: 'time', label: 'Updated at' },
-    { key: 'eventId', label: 'Event ID' },
+    { key: 'status', label: 'Status' }, { key: 'source', label: 'Source' }, { key: 'event', label: 'Events' },
+    ...(FEATURES.clusterCounts ? [{ key: 'clusters', label: 'Clusters' }] : []),
+    { key: 'cost', label: 'Cost' }, { key: 'time', label: 'Updated at' }, { key: 'runId', label: 'Run ID' },
   ];
   const [hidden, setHidden] = useState([]);
   const columns = allColumns.filter((c) => !hidden.includes(c.key));
   const page = Math.max(0, Number(params.get('pageNumber')) || 0);
   const pageRows = shown.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const filterGroups = [
-    { key: 'status', label: 'Status', options: ['completed', 'failed'] },
+    { key: 'status', label: 'Status', options: RUN_STATUSES },
     { key: 'source', label: 'Source', options: ['trigger', 'backfill'] },
     { key: 'outcome', label: 'Event', options: ['event', 'no event'], values: ['event', 'none'] },
   ];
 
   return (
     <Stack gap="sm">
-      <Toolbar filterGroups={filterGroups} params={params} update={update} columns={allColumns} hidden={hidden} setHidden={setHidden} />
-      <SearchBox value={search} onChange={setSearch} placeholder="Filter by status, run id, trace id…" />
+      <LoadError error={error} />
+      <Toolbar filterGroups={filterGroups} params={params} update={update} columns={allColumns} hidden={hidden}
+        setHidden={setHidden} onRefresh={onRefresh} />
+      <SearchBox value={search} onChange={setSearch} placeholder="Filter by status, run id, trace id, error…" />
       <Paper withBorder p="md">
-        <TimeBarChart data={rows} series={series} minutes={minutes} markers={versionMarkers(data.versions, buckets)} h={170} />
+        <TimeBarChart data={rows} series={series} minutes={minutes} markers={[]} h={170} />
         <Text size="sm" c="dimmed" mt="xs">Total: {shown.length}</Text>
       </Paper>
 
@@ -300,10 +315,12 @@ function RunsTab({ tripwire, params, update }) {
           <Table.Tbody>
             {pageRows.length === 0 && (
               <Table.Tr><Table.Td colSpan={columns.length}>
-                <Text ta="center" c="dimmed" py="md">{inRange.length === 0 ? 'No runs in this time range' : 'No runs match these filters'}</Text>
+                <Text ta="center" c="dimmed" py="md">
+                  {loading ? 'Loading…' : inRange.length === 0 ? 'No runs in this time range' : 'No runs match these filters'}
+                </Text>
               </Table.Td></Table.Tr>
             )}
-            {pageRows.map((r) => <Table.Tr key={r.id}>{columns.map((c) => <Table.Td key={c.key}>{runCell(c, r, data, update)}</Table.Td>)}</Table.Tr>)}
+            {pageRows.map((r) => <Table.Tr key={r.id}>{columns.map((c) => <Table.Td key={c.key}>{runCell(c, r)}</Table.Td>)}</Table.Tr>)}
           </Table.Tbody>
         </Table>
       </Table.ScrollContainer>
@@ -312,38 +329,38 @@ function RunsTab({ tripwire, params, update }) {
   );
 }
 
-function runCell(column, r, data, update) {
+function runCell(column, r) {
   switch (column.key) {
-    case 'status': return r.status === 'failed'
-      ? <Text size="sm" c="red.5">✕ Failed</Text>
-      : <Text size="sm" c="dimmed">✓ Completed</Text>;
+    case 'status':
+      if (r.status === 'failed') return <Tooltip label={r.error ?? 'Failed'} multiline w={320}><Text size="sm" c="red.5">✕ Failed</Text></Tooltip>;
+      if (r.status === 'completed') return <Text size="sm" c="dimmed">✓ Completed</Text>;
+      return <Text size="sm" c="dimmed">⋯ {r.status === 'running' ? 'Running' : 'Pending'}</Text>;
     case 'source': return <Text size="sm">{r.source === 'backfill' ? 'Backfill' : 'Trigger'}</Text>;
-    case 'event': return r.eventId
-      ? <Anchor size="sm" onClick={() => update({ tab: null, event: r.eventId, cluster: null })}>Event ↗</Anchor>
-      : <Anchor size="sm" c="dimmed" href={laminarTraceUrl(r.traceId)} target="_blank" rel="noreferrer">No event ↗</Anchor>;
-    case 'clusters': {
-      const c = r.clusterId && data.getCluster(r.clusterId);
-      return c ? <Text size="sm">{c.name}</Text> : <Text size="sm" c="dimmed">-</Text>;
-    }
-    case 'cost': return <Text size="sm" ff="monospace">{formatCost(r.cost)}</Text>;
+    case 'event': return r.events
+      ? <Text size="sm">{plural(r.events, 'event')}</Text>
+      : r.laminarUrl
+        ? <Anchor size="sm" c="dimmed" href={r.laminarUrl} target="_blank" rel="noreferrer">No event ↗</Anchor>
+        : <Text size="sm" c="dimmed">No event</Text>;
+    case 'clusters': return <Text size="sm" c="dimmed">-</Text>;
+    case 'cost': return <Text size="sm" ff="monospace">{r.cost == null ? '—' : formatCost(r.cost)}</Text>;
     case 'time': return <Text size="sm" style={{ whiteSpace: 'nowrap' }}>{formatTime(r.time)}</Text>;
-    case 'eventId': return <Text size="sm" ff="monospace" c="dimmed">{r.eventId ? shortId(r.eventId) : '-'}</Text>;
+    case 'runId': return <Text size="sm" ff="monospace" c="dimmed">{r.id}</Text>;
     default: return null;
   }
 }
 
 // ---------------------------------------------------------------- Settings tab
-// Laminar's section menu (General / Versions / Alerts / Backfill). General is the shared TripwireForm in edit mode;
-// the others are placeholders until we've seen Laminar's versions.
+// Laminar's section menu (General / Versions / Alerts / Backfill). General is the shared form in edit
+// mode, saving through the API; the others stay hidden until they have endpoints.
 
 const SECTIONS = [
-  { id: 'general', label: 'General' },
-  { id: 'versions', label: 'Versions' },
-  { id: 'alerts', label: 'Alerts' },
-  { id: 'backfill', label: 'Backfill' },
-];
+  { id: 'general', label: 'General', shown: true },
+  { id: 'versions', label: 'Versions', shown: FEATURES.versionsTab },
+  { id: 'alerts', label: 'Alerts', shown: FEATURES.alertsTab },
+  { id: 'backfill', label: 'Backfill', shown: FEATURES.backfill },
+].filter((x) => x.shown);
 
-function SettingsTab({ tripwire, params, update }) {
+function SettingsTab({ tripwire, params, update, onSaved }) {
   const section = SECTIONS.find((x) => x.id === params.get('section')) ?? SECTIONS[0];
   return (
     <Group align="flex-start" gap="xl" wrap="nowrap">
@@ -358,7 +375,8 @@ function SettingsTab({ tripwire, params, update }) {
       <Stack gap="xs" style={{ flex: 1, minWidth: 0 }}>
         <Title order={3}>{section.label}</Title>
         {section.id === 'general'
-          ? <TripwireForm mode="edit" initialValues={tripwire} />
+          ? <TripwireForm mode="edit" initialValues={tripwire} onTest={testRun}
+              onSubmit={(values) => editSignal(tripwire.id, values).then(onSaved)} />
           : <Text c="dimmed">Placeholder</Text>}
       </Stack>
     </Group>
@@ -368,7 +386,7 @@ function SettingsTab({ tripwire, params, update }) {
 // ---------------------------------------------------------------- shared bits of this page
 
 // Add filter · Columns · Refresh, plus the active filters as removable chips.
-function Toolbar({ filterGroups, params, update, columns, hidden, setHidden }) {
+function Toolbar({ filterGroups, params, update, columns, hidden, setHidden, onRefresh }) {
   const active = filterGroups.filter((g) => params.get(g.key));
   return (
     <Group gap="xs">
@@ -396,7 +414,7 @@ function Toolbar({ filterGroups, params, update, columns, hidden, setHidden }) {
           ))}
         </Menu.Dropdown>
       </Menu>
-      <Button variant="default" size="xs">↻ Refresh</Button>
+      <Button variant="default" size="xs" onClick={onRefresh}>↻ Refresh</Button>
       {active.map((g) => {
         const value = params.get(g.key);
         const label = g.values ? g.options[g.values.indexOf(value)] : value;
@@ -437,28 +455,14 @@ function Paging({ total, page, update }) {
   );
 }
 
-// Side panel for one event: payload, conversation, ids, link to the trace in Laminar.
-function EventDrawer({ tripwire, eventId, update }) {
-  const data = useStoryData();
-  const event = eventId ? data.getEvent(eventId) : null;
-  const valid = event && event.tripwireId === tripwire.id;
-  const cluster = valid && event.clusterId ? data.getCluster(event.clusterId) : null;
+// Side panel for one event: its fields, evidence, ids, and a link to the trace in Laminar.
+function EventDrawer({ tripwire, event, now, update }) {
   return (
-    <Drawer opened={Boolean(valid)} onClose={() => update({ event: null, pageNumber: undefined })} position="right" size="lg"
-      title={<Group gap="xs"><Text fw={600}>Event</Text>{valid && <SeverityBadge severity={event.severity} />}</Group>}>
-      {valid && (
+    <Drawer opened={Boolean(event)} onClose={() => update({ event: null, pageNumber: undefined })} position="right" size="lg"
+      title={<Group gap="xs"><Text fw={600}>Event</Text>{event && <SeverityBadge severity={event.severity} />}</Group>}>
+      {event && (
         <Stack gap="md">
-          <Text size="sm" c="dimmed">{formatTime(event.time)} · {formatRelative(event.time, data.asOf)}</Text>
-
-          <Box>
-            <Label>Cluster</Label>
-            {cluster ? (
-              <Group gap="xs">
-                <Text size="sm">{cluster.name}</Text>
-                <Anchor size="sm" onClick={() => update({ cluster: cluster.id, event: null, tab: null })}>Show cluster</Anchor>
-              </Group>
-            ) : <Text size="sm" c="dimmed">Not in a cluster yet</Text>}
-          </Box>
+          <Text size="sm" c="dimmed">{formatTime(event.time)} · {formatRelative(event.time, now)}</Text>
 
           {tripwire.payloadFields.map((f) => (
             <Box key={f.name}>
@@ -469,23 +473,22 @@ function EventDrawer({ tripwire, eventId, update }) {
 
           <Box>
             <Label>Conversation turn</Label>
-            {event.excerpt.visitor ? (
-              <Stack gap="xs">
-                <Paper withBorder p="sm"><Text size="xs" c="dimmed" mb={2}>Visitor</Text><Text size="sm">{event.excerpt.visitor}</Text></Paper>
-                <Paper withBorder p="sm"><Text size="xs" c="dimmed" mb={2}>Assistant</Text><Text size="sm">{event.excerpt.reply}</Text></Paper>
-              </Stack>
-            ) : <Text size="sm" c="dimmed">Open the trace in Laminar to see the conversation.</Text>}
+            <Text size="sm" c="dimmed">Open the trace in Laminar to see the conversation.</Text>
           </Box>
 
           <Table verticalSpacing={4}>
             <Table.Tbody>
-              {[['Event ID', event.id], ['Run ID', event.runId], ['Trace ID', event.traceId], ['Conversation', event.conversationId], ['App version', event.appVersion]].map(([k, v]) => (
+              {[['Event ID', event.id], ['Run ID', event.runId], ['Trace ID', event.traceId],
+                ['Conversation', event.conversationId ?? '—'], ['Evidence', event.evidenceLabels.join(', ') || '—'],
+                ['Signal version', event.versionNumber]].map(([k, v]) => (
                 <Table.Tr key={k}><Table.Td><Text size="xs" c="dimmed">{k}</Text></Table.Td><Table.Td><Text size="xs" ff="monospace">{v}</Text></Table.Td></Table.Tr>
               ))}
             </Table.Tbody>
           </Table>
 
-          <Group><Button component="a" href={laminarTraceUrl(event.traceId)} target="_blank" rel="noreferrer">Open trace in Laminar ↗</Button></Group>
+          {event.laminarUrl && (
+            <Group><Button component="a" href={event.laminarUrl} target="_blank" rel="noreferrer">Open trace in Laminar ↗</Button></Group>
+          )}
         </Stack>
       )}
     </Drawer>

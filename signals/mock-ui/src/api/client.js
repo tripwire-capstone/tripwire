@@ -24,8 +24,8 @@ async function request(method, path, body) {
   return data;
 }
 
-// The time pickers give local times without a zone ("2026-11-11T09:30:00"); the API wants UTC.
-const utc = (time) => new Date(time).toISOString();
+// Pages use the mock's time format: UTC without a zone ("2026-11-11T09:30:00"). The API wants a zone.
+const utc = (time) => (/Z|[+-]\d\d:\d\d$/.test(time) ? time : `${time}Z`);
 
 function rangeQuery(range) {
   const params = new URLSearchParams();

@@ -20,8 +20,10 @@ import {
   Tooltip,
   UnstyledButton,
 } from "@mantine/core";
+import { FEATURES } from "../api";
+import { SeverityBadge } from "./Badges";
 import { useStoryData } from "./StoryClock";
-import { formatTime } from "./format";
+import { formatCost, formatTime } from "./format";
 import classes from "./TripwireForm.module.css";
 
 const TYPES = [
@@ -46,7 +48,7 @@ const FILTERS = {
     label: "Status",
     operators: [
       { value: "eq", label: "equals" },
-      { value: "ne", label: "does not equal" },
+      ...(FEATURES.statusNotEquals ? [{ value: "ne", label: "does not equal" }] : []),
     ],
   },
   span_names: {
@@ -64,6 +66,14 @@ const FILTERS = {
     ],
   },
 };
+// The filters this form offers. Status is always supported; the rest wait for the backend (src/api/features.js).
+const OFFERED_FILTERS = Object.fromEntries(
+  Object.entries(FILTERS).filter(([field]) =>
+    field === "status" ||
+    (field === "total_token_count" && FEATURES.tokenFilter) ||
+    (["span_names", "tags"].includes(field) && FEATURES.spanAndTagFilters),
+  ),
+);
 const listValues = (text) =>
   text
     .split(",")
@@ -209,6 +219,8 @@ function TemplateButton({ template, selected, onSelect }) {
  * Reusable in a drawer or a settings page; no routing or persistence of its own.
  * initialValues: tripwire record to prefill; mode: 'create' (default) or 'edit'.
  * onSubmit(values): optional async save handler. Without it, saves are simulated.
+ * onTest(traceId, values): optional async test-on-a-trace handler. Without it, the test panel
+ *   shows the mock's scripted sample results.
  * onCancel(): optional parent dismissal handler.
  * Changing the mode or supplied values resets the form, but parent rerenders do not.
  */
@@ -216,6 +228,7 @@ export default function TripwireForm({
   initialValues,
   mode = "create",
   onSubmit,
+  onTest,
   onCancel,
 }) {
   return (
@@ -224,17 +237,23 @@ export default function TripwireForm({
       initialValues={initialValues}
       mode={mode}
       onSubmit={onSubmit}
+      onTest={onTest}
       onCancel={onCancel}
     />
   );
 }
 
-function TripwireFormFields({ initialValues, mode, onSubmit, onCancel }) {
+// An API error's details as one readable line (a 422 lists every problem).
+const errorText = (error) =>
+  Array.isArray(error?.detail) ? error.detail.join(" · ") : error?.message || "Unknown error";
+
+function TripwireFormFields({ initialValues, mode, onSubmit, onTest, onCancel }) {
   const { tripwireTemplates, sampleTraces } = useStoryData();
   const editing = mode === "edit";
+  // With templates hidden, a new signal starts blank instead of from the Friction template.
   const initial = tripwireTemplates.find(
     (template) =>
-      template.id === (editing ? initialValues?.templateId : "friction"),
+      template.id === (editing ? initialValues?.templateId : FEATURES.templates ? "friction" : null),
   );
   const ids = useId();
   const [templateId, setTemplateId] = useState(initial?.id || "blank");
@@ -251,7 +270,7 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onCancel }) {
   const [filters, setFilters] = useState(() =>
     (
       initialValues?.filters ??
-      (editing ? [] : [{ field: "total_token_count", op: "gt", value: 1000 }])
+      (editing || !FEATURES.tokenFilter ? [] : [{ field: "total_token_count", op: "gt", value: 1000 }])
     ).map((filter) => ({
       ...filter,
       id: crypto.randomUUID(),
@@ -268,6 +287,9 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onCancel }) {
   const [notice, setNotice] = useState(null);
   const [sampleId, setSampleId] = useState(null);
   const [testResult, setTestResult] = useState(null);
+  const [traceId, setTraceId] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [liveResult, setLiveResult] = useState(null); // { findings, analysis, cost } or { error }
   const sample = sampleTraces.find((item) => item.id === sampleId);
   const selectedTemplate = tripwireTemplates.find(
     (template) => template.id === templateId,
@@ -287,6 +309,7 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onCancel }) {
 
   useEffect(() => {
     setTestResult(null);
+    setLiveResult(null);
     setNotice(null);
   }, [
     name,
@@ -297,6 +320,7 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onCancel }) {
     filters,
     sampling,
     sampleId,
+    traceId,
     active,
   ]);
   // Existing records may contain a legacy filter not offered for new filters.
@@ -316,14 +340,15 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onCancel }) {
     };
   };
   const filterOptions = [
-    ...Object.entries(FILTERS).map(([value, spec]) => ({
+    ...Object.entries(OFFERED_FILTERS).map(([value, spec]) => ({
       value,
       label: spec.label,
     })),
     ...[...new Set(filters.map((filter) => filter.field))]
-      .filter((field) => !FILTERS[field])
-      .map((field) => ({ value: field, label: field })),
+      .filter((field) => !OFFERED_FILTERS[field])
+      .map((field) => ({ value: field, label: FILTERS[field]?.label ?? field })),
   ];
+  const firstFilter = Object.keys(OFFERED_FILTERS)[0];
   function applyTemplate(template) {
     setTemplateId(template.id);
     setInstruction(template.instruction || "");
@@ -399,7 +424,25 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onCancel }) {
       });
       return;
     }
-    const values = {
+    setSaving(true);
+    try {
+      await onSubmit(currentValues());
+      setNotice({
+        color: "teal",
+        text: editing ? "Changes saved." : "Signal created.",
+      });
+    } catch (error) {
+      setNotice({
+        color: "red",
+        text: `Could not save: ${errorText(error)}. Your edits are still here.`,
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+  // What the form currently says, in the shape onSubmit and onTest receive.
+  function currentValues() {
+    return {
       ...initialValues,
       name: name.trim(),
       templateId,
@@ -425,20 +468,21 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onCancel }) {
       sampling,
       status: active ? "active" : "paused",
     };
-    setSaving(true);
+  }
+  // Judges one stored trace with the form as it is now, without saving anything.
+  async function testLive() {
+    if (!validate()) {
+      setNotice({ color: "red", text: "Check the highlighted fields." });
+      return;
+    }
+    setTesting(true);
     try {
-      await onSubmit(values);
-      setNotice({
-        color: "teal",
-        text: editing ? "Changes saved." : "Signal created.",
-      });
-    } catch {
-      setNotice({
-        color: "red",
-        text: "Could not save. Your edits are still here. Please try again.",
-      });
+      const result = await onTest(traceId.trim(), currentValues());
+      setLiveResult(result);
+    } catch (error) {
+      setLiveResult({ error: errorText(error) });
     } finally {
-      setSaving(false);
+      setTesting(false);
     }
   }
   function test() {
@@ -460,7 +504,8 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onCancel }) {
     <form onSubmit={submit} noValidate>
       <fieldset disabled={saving} className={classes.fieldset}>
         <Stack gap="xl">
-          {editing && (
+          {/* On real data, on/off is the signal page's own button (it saves at once). */}
+          {editing && !onSubmit && (
             <Switch
               label="Active"
               checked={active}
@@ -477,7 +522,7 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onCancel }) {
             error={errors.name}
             data-autofocus
           />
-          {!editing && (
+          {!editing && FEATURES.templates && (
             <Stack gap="xs">
               <Label help="Prefill the form with a preset or start blank.">
                 Template
@@ -602,7 +647,7 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onCancel }) {
               </Box>
             ))}
           </Stack>
-          <Radio.Group
+          {FEATURES.spanTrigger && <Radio.Group
             value={trigger}
             onChange={setTrigger}
             label={
@@ -627,7 +672,7 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onCancel }) {
                 />
               )}
             </Stack>
-          </Radio.Group>
+          </Radio.Group>}
           <Stack gap="sm">
             <Group justify="space-between">
               <Label help="Only read traces matching all these conditions.">
@@ -643,9 +688,9 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onCancel }) {
                     ...current,
                     {
                       id: crypto.randomUUID(),
-                      field: "span_names",
-                      operator: "includes",
-                      value: "",
+                      field: firstFilter,
+                      operator: OFFERED_FILTERS[firstFilter].operators[0].value,
+                      value: firstFilter === "status" ? "error" : "",
                     },
                   ])
                 }
@@ -744,7 +789,7 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onCancel }) {
               </Stack>
             ))}
           </Stack>
-          <Stack gap="sm">
+          {FEATURES.sampling && <Stack gap="sm">
             <Group justify="space-between">
               <Label
                 help="The percentage of matching traces to analyze."
@@ -770,11 +815,55 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onCancel }) {
                 ? "Read every matching trace."
                 : `Read ${sampling}% of matching traces.`}
             </Text>
-          </Stack>
+          </Stack>}
           <Accordion variant="default">
             <Accordion.Item value="test">
               <Accordion.Control>Test on a sample trace</Accordion.Control>
               <Accordion.Panel>
+                {onTest ? (
+                  <Stack gap="sm">
+                    <Text size="xs" c="dimmed">
+                      Runs the judge on one trace Tripwire has stored, with the form as it is now.
+                      Nothing is saved. Copy a trace ID from a signal's Events or Runs tab.
+                    </Text>
+                    <TextInput
+                      label="Trace ID"
+                      placeholder="e.g. 9bfa8e02-f0c5-38ed-866d-524137c4c5b1"
+                      value={traceId}
+                      onChange={(event) => setTraceId(event.currentTarget.value)}
+                    />
+                    <Group>
+                      <Button type="button" variant="light" disabled={!traceId.trim()} loading={testing} onClick={testLive}>
+                        Test signal
+                      </Button>
+                    </Group>
+                    {liveResult?.error && (
+                      <Alert color="red" title="Test failed" role="alert">{liveResult.error}</Alert>
+                    )}
+                    {liveResult && !liveResult.error && (
+                      <Alert color="teal" title={liveResult.findings.length
+                        ? `${liveResult.findings.length} finding${liveResult.findings.length === 1 ? "" : "s"}`
+                        : "No findings for this trace"} role="status">
+                        <Stack gap="sm">
+                          {liveResult.findings.map((finding, i) => (
+                            <Stack key={i} gap={4}>
+                              <Group gap="xs">
+                                <SeverityBadge severity={finding.severity} />
+                                <Text size="xs" c="dimmed">Evidence: {finding.evidence_labels.join(", ") || "—"}</Text>
+                              </Group>
+                              {Object.entries(finding.fields).map(([key, value]) => (
+                                <Text key={key} size="sm"><strong>{key}:</strong> {String(value)}</Text>
+                              ))}
+                            </Stack>
+                          ))}
+                          <Text size="xs" c="dimmed">
+                            {liveResult.analysis} · {liveResult.model} · {liveResult.cost_usd == null ? "cost unknown" : formatCost(liveResult.cost_usd)}
+                          </Text>
+                        </Stack>
+                      </Alert>
+                    )}
+                  </Stack>
+                ) : (
                 <Stack gap="sm">
                   <Text size="xs" c="dimmed">
                     Scripted examples only. The editable instruction, filters,
@@ -847,6 +936,7 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onCancel }) {
                     </Alert>
                   )}
                 </Stack>
+                )}
               </Accordion.Panel>
             </Accordion.Item>
           </Accordion>
@@ -861,18 +951,20 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onCancel }) {
           <Box className={classes.footer}>
             <Divider mb="md" />
             <Group justify="space-between">
-              <Button
-                type="button"
-                variant="light"
-                onClick={() =>
-                  setNotice({
-                    color: "gray",
-                    text: "Backfill is planned for later. Your form inputs are unchanged.",
-                  })
-                }
-              >
-                Backfill
-              </Button>
+              {FEATURES.backfill ? (
+                <Button
+                  type="button"
+                  variant="light"
+                  onClick={() =>
+                    setNotice({
+                      color: "gray",
+                      text: "Backfill is planned for later. Your form inputs are unchanged.",
+                    })
+                  }
+                >
+                  Backfill
+                </Button>
+              ) : <span />}
               <Group gap="xs">
                 {onCancel && (
                   <Button

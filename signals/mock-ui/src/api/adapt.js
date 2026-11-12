@@ -1,6 +1,10 @@
 // Turns API responses into the shapes the pages were built on, and form values into API bodies.
 // When the API changes, this is the one file to update.
 
+// API times ("2026-11-11T22:30:43.992398Z") -> the pages' format: UTC without a zone
+// ("2026-11-11T22:30:43"), which formatTime, rangeFromParams and the charts expect.
+const pageTime = (iso) => (iso ? iso.slice(0, 19) : null);
+
 const kindOf = (template) => (template ? "preset" : "custom");
 const statusOf = (active) => (active ? "active" : "paused");
 
@@ -12,11 +16,11 @@ export function summaryFromApi(s) {
     kind: kindOf(s.template),
     templateId: s.template,
     status: statusOf(s.active),
-    createdAt: s.created_at,
+    createdAt: pageTime(s.created_at),
     events: s.events,
     problemEvents: s.problem_events,
     runs: s.runs,
-    lastEventAt: s.last_event_at,
+    lastEventAt: pageTime(s.last_event_at),
     clusters: null, // no clusters endpoint yet (FEATURES.clusterCounts)
     activity: [], // no per-day counts yet (FEATURES.activityColumn)
   };
@@ -30,7 +34,7 @@ export function signalFromApi(s) {
     kind: kindOf(s.template),
     templateId: s.template,
     status: statusOf(s.active),
-    createdAt: s.created_at,
+    createdAt: pageTime(s.created_at),
     instruction: s.instruction,
     criticalGuidance: s.critical_guidance,
     model: s.model,
@@ -65,8 +69,8 @@ export function eventFromApi(e, signalId) {
     traceId: e.laminar_trace_id,
     laminarUrl: e.laminar_url,
     conversationId: e.session_id,
-    time: e.trace_ended_at, // when the turn happened
-    createdAt: e.created_at, // when the judge found it
+    time: pageTime(e.trace_ended_at), // when the turn happened
+    createdAt: pageTime(e.created_at), // when the judge found it
     versionNumber: e.version_number,
     source: e.source,
     clusterId: e.cluster_id,
@@ -96,7 +100,7 @@ export function runFromApi(r, signalId) {
     error: r.last_error,
     traceId: r.laminar_trace_id,
     laminarUrl: r.laminar_url,
-    time: r.finished_at ?? r.created_at,
+    time: pageTime(r.finished_at ?? r.created_at),
     versionNumber: r.version_number,
     clusterId: null,
   };
