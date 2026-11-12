@@ -1,6 +1,8 @@
 # Tripwire mock UI
 
-A clickable mock of Tripwire's core screens, on fake data. Not connected to Laminar or our services.
+A clickable mock of Tripwire's core screens. The signals pages (Signals list, signal page, New signal) read the
+real Tripwire API; everything else runs on fake data. How the signals pages are wired and how to run them with
+the backend: `SIGNALS_API.md`.
 
 ```
 cd signals/mock-ui
@@ -9,6 +11,7 @@ npm run dev        # http://localhost:5174
 ```
 
 - What each screen shows: `SPEC.md`. Rules for AI coding agents (and us): `AGENTS.md`.
+- Signals pages on the real API: `SIGNALS_API.md`. Controls hidden until the API supports them: `HIDDEN_CONTROLS.md`.
 - Visual reference with every shared component: http://localhost:5174/style
 - Fake data (the Olympic story): `src/mock/data.js`. Pages read it through `useStoryData()`, and "now" is fixed
   at Nov 4, 9:30 AM. A **Story day** picker (Day 1 / Day 3 / Day 6 / Today) that changes every screen at once is

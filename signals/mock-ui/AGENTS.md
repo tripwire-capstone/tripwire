@@ -1,6 +1,7 @@
 # Tripwire mock UI: rules
 
 Read this before changing anything in `mock-ui/`. What each screen shows is in `SPEC.md`.
+Before touching a signals page or `src/api/`, also read `SIGNALS_API.md` (how they're wired to the API).
 
 - **Two data sources.** The signals pages (Signals list, signal detail with its Events, Runs and Settings
   tabs, and the New signal / edit form) read the **real API** through `src/api/` (`useSignals`, `useSignal`,
