@@ -1,8 +1,8 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, call
+from unittest.mock import AsyncMock, Mock, call, patch, sentinel
 
-from tripwire.judge.judge import _complete_judgment
+from tripwire.judge.judge import _complete_judgment, _judge_trace
 from tripwire.judge.render import Rendered
 from tripwire.judge.types import JudgeError, SignalVersion, Usage
 from tripwire.llm import LLMBadOutput, LLMInputTooLong, LLMRefused, LLMServiceError, LLMUsage
@@ -25,6 +25,53 @@ class JudgeModelTests(unittest.TestCase):
         return _complete_judgment(
             self.rendered, self.messages, self.schema, self.version, complete=complete
         )
+
+    def test_judge_trace_closes_laminar_before_calling_the_model(self):
+        laminar = SimpleNamespace(aclose=AsyncMock())
+        response = SimpleNamespace(
+            parsed={"analysis": "No issue.", "findings": []},
+            raw="{}",
+            model="model",
+            input_tokens=9,
+            cached_input_tokens=2,
+            output_tokens=5,
+            cost_usd=0.2,
+        )
+
+        def respond(*args, **kwargs):
+            laminar.aclose.assert_awaited_once_with()
+            return response
+
+        complete = Mock(side_effect=respond)
+        with patch(
+            "tripwire.judge.judge._prepare_judge_input",
+            return_value=(self.rendered, self.messages, self.schema),
+        ) as prepare:
+            result = _judge_trace(
+                laminar, sentinel.trace, self.version, complete=complete, model_timeout=45
+            )
+
+        prepare.assert_awaited_once_with(laminar, sentinel.trace, self.version)
+        complete.assert_called_once_with(
+            "model", self.messages, self.schema, timeout=45, max_output_tokens=4_000
+        )
+        self.assertEqual(result.judge_input, self.rendered.text)
+        self.assertEqual(result.usage, Usage(9, 2, 5, 0.2))
+
+    def test_judge_trace_closes_laminar_when_preparation_fails(self):
+        laminar = SimpleNamespace(aclose=AsyncMock())
+        complete = Mock()
+        error = JudgeError("Laminar unavailable", retryable=True, uses_attempt=False)
+
+        with patch("tripwire.judge.judge._prepare_judge_input", side_effect=error):
+            with self.assertRaises(JudgeError) as caught:
+                _judge_trace(
+                    laminar, sentinel.trace, self.version, complete=complete, model_timeout=45
+                )
+
+        self.assertIs(caught.exception, error)
+        laminar.aclose.assert_awaited_once_with()
+        complete.assert_not_called()
 
     def test_cutoff_repairs_once_with_same_messages_and_adds_usage(self):
         cutoff = LLMBadOutput("cut off", finish_reason="length", usage=LLMUsage(8, 1, 4, 0.1))

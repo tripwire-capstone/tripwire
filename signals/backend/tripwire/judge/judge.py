@@ -1,25 +1,18 @@
-"""STUB judge: returns made-up results in the real shape, without Laminar or an LLM.
-
-The judge half replaces the body of judge() (HANDOFF_JUDGE.md, B5). The signature and the
-types never change, so the runner doesn't either.
-"""
+"""Judge a finished Laminar trace using a saved or draft signal version."""
 
 import asyncio
 import math
 import os
 
 from ..llm import LLMBadOutput, LLMError, LLMInputTooLong, LLMRefused, LLMServiceError
-from ..placeholder import picked
+from ..llm._openai import _complete_openai
 from .check import check_findings
 from .fetch import fetch_earlier_turns_async, fetch_spans_async
-from .laminar import LaminarUnavailable
+from .laminar import JudgeLaminarSQL, LaminarUnavailable
 from .prompt import build_judge_messages
 from .render import Rendered, render_trace
 from .schema import build_judge_schema
-from .types import Finding, JudgeError, JudgeResult, SignalVersion, TraceRow, Usage
-
-# Tests set this to make the next judge() call raise it (see tests/test_judge_stub.py).
-stub_error: JudgeError | None = None
+from .types import JudgeError, JudgeResult, SignalVersion, TraceRow, Usage
 
 
 async def _prepare_judge_input(
@@ -141,23 +134,37 @@ def _error_usage(error: LLMError) -> Usage:
     )
 
 
-def judge(laminar, trace: TraceRow, version: SignalVersion, *, event_rate: float = 0.5) -> JudgeResult:
-    if stub_error is not None:
-        raise stub_error
+def _judge_trace(
+    laminar: JudgeLaminarSQL,
+    trace: TraceRow,
+    version: SignalVersion,
+    *,
+    complete,
+    model_timeout: float,
+) -> JudgeResult:
+    """Judge one trace, taking ownership of a fresh Laminar client for the fetch."""
+    async def prepare():
+        try:
+            return await _prepare_judge_input(laminar, trace, version)
+        finally:
+            await laminar.aclose()
 
-    findings = []
-    # Same trace -> same answer every time, like the placeholder runner.
-    if picked(f"event:{trace.laminar_trace_id}", event_rate):
-        findings.append(Finding(severity="warning", span_ids=[], fields={}, evidence_labels=["S1"]))
-        if picked(f"event2:{trace.laminar_trace_id}", event_rate):
-            findings.append(Finding(severity="info", span_ids=[], fields={}, evidence_labels=["S2"]))
+    rendered, messages, schema = asyncio.run(prepare())
+    return _complete_judgment(
+        rendered,
+        messages,
+        schema,
+        version,
+        complete=complete,
+        model_timeout=model_timeout,
+    )
 
-    return JudgeResult(
-        findings=findings,
-        analysis="stub judge: no analysis",
-        raw_output="{}",
-        judge_input=f"stub judge_input for trace {trace.laminar_trace_id}",
-        dropped_findings=0,
-        model="stub",
-        usage=Usage(),
+
+def judge(laminar: JudgeLaminarSQL, trace: TraceRow, version: SignalVersion) -> JudgeResult:
+    return _judge_trace(
+        laminar,
+        trace,
+        version,
+        complete=_complete_openai,
+        model_timeout=int(os.getenv("JUDGE_MODEL_TIMEOUT_SECONDS", "60")),
     )
