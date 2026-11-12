@@ -5,7 +5,7 @@ import openai
 import pytest
 
 from tripwire.clusterer.embed import DIMENSIONS, FakeEmbedder, OpenAIEmbedder, check_vectors
-from tripwire.clusterer.llm_client import LLMServiceError
+from tripwire.llm import LLMServiceError
 
 
 def test_fake_embedder_same_text_same_vector_different_text_different_vector():

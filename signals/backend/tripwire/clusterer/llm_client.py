@@ -1,8 +1,9 @@
-"""A small LLM client for the summarizer, shaped like the shared module the Signals pair proposed.
+"""The summarizer's OpenAI client. Its error and usage types are the shared ones in `tripwire/llm/`.
 
-Stand-in until their `tripwire/llm/` lands (FOR_CLUSTERING_AGENTS.md section 4); switching over
-should only touch this file and its imports. It lives inside clusterer/ so its name can't clash
-with their package.
+Step 1 of moving onto the shared module: the types are shared, the request code is still ours. The
+shared request code (`tripwire/llm/_openai.py`) is the judge's for now; using it here waits on a
+public `complete()` with a schema-name parameter, a shared price table and an agreed rule for
+401/403 (step 2, with the Signals pair).
 
 One call to complete() = one request to OpenAI: the SDK's own automatic retries are off, because
 the summarizer decides about retries itself (Q20) and every paid call must be counted.
@@ -19,6 +20,8 @@ raises as-is, so a setup mistake shows up loudly instead of looking like a model
 import json
 from dataclasses import dataclass, field
 
+from ..llm import LLMBadOutput, LLMInputTooLong, LLMRefused, LLMServiceError, LLMUsage
+
 # Prices per 1M tokens, for cost_usd. A model not listed gets cost None ("not priced"), never 0.
 # gpt-6-luna: $0.10 input, $0.01 cached read, $0.50 output (checked Nov 8); cache writes cost
 # 1.25x input on GPT-5.6 and later (OpenAI prompt caching guide, checked Nov 10).
@@ -30,43 +33,9 @@ REQUEST_TIMEOUT_SECONDS = 60
 
 
 @dataclass(frozen=True)
-class Usage:
-    input_tokens: int = 0
-    cached_input_tokens: int = 0
-    output_tokens: int = 0
-    cost_usd: float | None = None
-
-
-@dataclass(frozen=True)
 class LLMResult:
     output: dict
-    usage: Usage
-
-
-class LLMError(Exception):
-    """Base class. `usage` is set when the call reached the model and was paid for."""
-
-    def __init__(self, message, usage=None):
-        super().__init__(message)
-        self.usage = usage
-
-
-class LLMServiceError(LLMError):
-    def __init__(self, message, retry_after=None):
-        super().__init__(message)
-        self.retry_after = retry_after   # seconds, from OpenAI's retry-after header, or None
-
-
-class LLMBadOutput(LLMError):
-    pass
-
-
-class LLMInputTooLong(LLMError):
-    pass
-
-
-class LLMRefused(LLMError):
-    pass
+    usage: LLMUsage
 
 
 def price(model, input_tokens, cached_tokens, cache_write_tokens, output_tokens):
@@ -120,11 +89,11 @@ class OpenAIClient:
 
 def _usage(model, raw):
     if raw is None:
-        return Usage()
+        return LLMUsage()
     details = raw.prompt_tokens_details
     cached = (details.cached_tokens or 0) if details else 0
     writes = (getattr(details, "cache_write_tokens", None) or 0) if details else 0
-    return Usage(
+    return LLMUsage(
         input_tokens=raw.prompt_tokens,
         cached_input_tokens=cached,
         output_tokens=raw.completion_tokens,
@@ -150,7 +119,7 @@ class FakeLLM:
     `script` items are dicts (returned as the output, with `usage`) or LLMError instances (raised).
     """
     script: list
-    usage: Usage = field(default_factory=lambda: Usage(100, 0, 20, 0.00002))
+    usage: LLMUsage = field(default_factory=lambda: LLMUsage(100, 0, 20, 0.00002))
     requests: list = field(default_factory=list)
 
     def complete(self, model, messages, json_schema):

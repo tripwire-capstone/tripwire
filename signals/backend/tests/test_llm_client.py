@@ -6,13 +6,8 @@ import httpx
 import openai
 import pytest
 
-from tripwire.clusterer.llm_client import (
-    LLMBadOutput,
-    LLMInputTooLong,
-    LLMRefused,
-    LLMServiceError,
-    OpenAIClient,
-)
+from tripwire.clusterer.llm_client import OpenAIClient
+from tripwire.llm import LLMBadOutput, LLMInputTooLong, LLMRefused, LLMServiceError
 
 SCHEMA = {"type": "object", "properties": {"summary": {"type": "string"}},
           "required": ["summary"], "additionalProperties": False}
