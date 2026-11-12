@@ -7,30 +7,21 @@ from datetime import datetime, timezone
 import psycopg
 
 from ..judge.judge import judge
+from ..judge.laminar import JudgeLaminarSQL
 from ..judge.types import JudgeError
-from ..poller.laminar import LaminarSQL
 from . import jobs
 
 log = logging.getLogger("runner")
 
 
 class LaminarClients:
-    """One Laminar client per API URL for the judge: short timeout and no retries of its own,
-    so a slow Laminar can't hold a run past its lease. The runner does the retrying."""
+    """Create a fresh Laminar client for each judgment. The judge closes it."""
 
-    def __init__(self, api_key, timeout_seconds):
+    def __init__(self, api_key):
         self.api_key = api_key
-        self.timeout = timeout_seconds
-        self.clients = {}
 
     def get(self, api_url):
-        if api_url not in self.clients:
-            self.clients[api_url] = LaminarSQL(self.api_key, api_url, timeout=self.timeout, retries=0)
-        return self.clients[api_url]
-
-    def close(self):
-        for client in self.clients.values():
-            client.close()
+        return JudgeLaminarSQL(self.api_key, api_url)
 
 
 def backoff_seconds(retry_after, age_seconds, settings, rand=random.random):
@@ -84,16 +75,13 @@ def record_error(conn, claimed, error, settings):
 
 def worker_loop(name, database_url, api_key, settings, stop, judge_fn=judge):
     """Keep working until `stop` is set. A lost database connection is retried, never fatal."""
-    clients = LaminarClients(api_key, settings.fetch_timeout_seconds)
-    try:
-        while not stop.is_set():
-            try:
-                with psycopg.connect(database_url, autocommit=True) as conn:
-                    while not stop.is_set():
-                        if not work_once(conn, settings, clients, judge_fn):
-                            stop.wait(settings.idle_seconds)
-            except Exception:
-                log.exception("%s: error, reconnecting in 5 s", name)
-                stop.wait(5)
-    finally:
-        clients.close()
+    clients = LaminarClients(api_key)
+    while not stop.is_set():
+        try:
+            with psycopg.connect(database_url, autocommit=True) as conn:
+                while not stop.is_set():
+                    if not work_once(conn, settings, clients, judge_fn):
+                        stop.wait(settings.idle_seconds)
+        except Exception:
+            log.exception("%s: error, reconnecting in 5 s", name)
+            stop.wait(5)

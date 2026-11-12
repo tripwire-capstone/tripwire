@@ -6,3 +6,5 @@ psycopg[binary]==3.3.8
 python-dotenv==1.2.3
 pytest==9.1.1
 scipy==1.18.1        # average-linkage grouping (clusterer, pool step)
+fastapi==0.115.6     # the HTTP API
+uvicorn==0.32.1      # serves the API
