@@ -91,7 +91,7 @@ responses.
 | Q11 | **Failures:** event's own failures (bad output) → up to 3 attempts with growing waits, then `failed` with the error. Service problems (timeouts, rate limits, outages) → wait and retry **without using attempts**; the wait is per event (`not_before`, growing, capped), as the runner does (Signals S7), so one rate-limited call doesn't stall the batch. "Input too long" or a **refusal** → `failed` at once (a retry gets the same answer). Unlike the runner's 24 h give-up, a summary never gives up on a service problem; the health check (Q12) flags the stall instead. Each step commits on its own. A command re-queues failed events. No leases or claiming (single clusterer). | Failures recorded; outages heal themselves; never pays twice for a finished step. |
 | Q12 | **UI:** an unclustered event shows only as gray "not in a cluster" (waiting, unclustered and failed look the same, like Laminar's "Unclustered"). Failures live in `event_summaries` + logs. **Health check unhealthy** when an unfinished **live** event is older than `CLUSTER_HEALTH_STALL_MINUTES` (default 15) **or** the last `CLUSTER_HEALTH_FAILURE_RUN` summaries (default 10) all failed. Backfill events don't count toward the first rule: they're prepared after live ones by design (#14), so they may wait (Nov 11). | Catches the one critical case: clustering silently stopping. |
 | Q13 | **One loop** (above). "Decide then apply": all joining decisions in a pass use the centers as they stood at the start of the pass, then are applied together (prototype's shuffle test proves order-independence). Split into two workers later only if backfill testing shows the loop can't keep up. | Fewest moving parts; steps already communicate through tables. |
-| Q14 | **Tests:** fake summarizer (scripted output; simulates timeout, broken output, too long, refusal, outage) and fake embedder; two events from one run (same `judge_input`, different `payload`) must get different prompts, each with its own payload; grouping tests **place vectors at exact distances** for boundary tests. **Calibration:** park_demo through the real judge, summarizer and embedder, scored by `report.py` (reworked for these tables); sweep the threshold (e.g. 0.20–0.40). If real events aren't ready by Friday, ship `0.30`, labeled temporary. | Exact, free, repeatable tests; calibration on the only traffic with answer keys. |
+| Q14 | **Tests:** fake summarizer (scripted output; simulates timeout, broken output, too long, refusal, outage) and fake embedder; two events from one run (same `judge_input`, different `payload`) must get different prompts, each with its own payload; grouping tests **place vectors at exact distances** for boundary tests. **Calibration:** park_demo through the real judge, summarizer and embedder, scored by `report.py` (written new for these tables, see "Calibration"); sweep the threshold (e.g. 0.20–0.40). If real events aren't ready by Friday, ship `0.30`, labeled temporary. | Exact, free, repeatable tests; calibration on the only traffic with answer keys. |
 
 **Definitions used by both halves**
 - **Pool:** events with an embedding and no `cluster_members` row (unchanged from CONTRACT.md).
@@ -170,6 +170,34 @@ Code: `tripwire/clusterer/prepare.py`, `embed.py`. Full reasoning: Design Notes 
 - **Embedder:** `text-embedding-3-small`, `summary` only, one call per batch, no failure bookkeeping (a
   failed call is retried next pass), raises on a vector that isn't 1536 numbers, no cost tracking (MVP).
 
+## Calibration (grouping PR 6, decided Nov 12)
+
+Code: `tripwire/clusterer/report.py`, `sweep.py`. A developer tool, never run by the deployed product.
+`python -m tripwire.clusterer.report --database-url URL --answer-key <park-traffic run>/answer_key.jsonl [--sweep]`
+(`--database-url` is required and never read from `DATABASE_URL`).
+
+- **Labels:** park-traffic's answer key lists, per turn, its Laminar trace ID and the planted bugs that
+  fired in it (`bugs_by_turn`), so each event gets its own turn's bugs (event → trace → turn). A bug is
+  recorded on the turn where it fires; events whose turn had no bug are listed, not scored.
+- **Report:** funnel (traces → runs → events → summaries → embedded → clustered / pool), bug × cluster
+  table, pool events with their nearest neighbour; scores per Signal and summarizer prompt version.
+- **Scores:** extended BCubed precision / recall (Amigó et al. 2009: per event, so one big cluster can't
+  outweigh the rest; handles an event with two bugs). The **suggested threshold has the best F0.5**
+  (precision counts twice): with F1, a cluster mixing several problems scored better than an honest split
+  of one. Pairwise precision / recall shown for comparison with the prototype. A pool event counts as alone.
+- **Sweep:** per threshold (default 0.20–0.40 by 0.02), the **real `run_pass()` is replayed** on a copy of
+  the data in a throwaway `calib_` schema: embeddings are released in the order and passes they were
+  created in (recovered from their timestamps), then passes run until nothing changes. No OpenAI calls;
+  real tables untouched. Not a from-scratch regroup: that would skip joining by center.
+- **Limits:** the threshold is measured on park traffic (the only traffic with an answer key for causes)
+  and shipped as the default for every app. It should carry over because every app's events go through the
+  same summarizer and embedder (Q1), but other domains may differ; check it on τ-bench by eye (mixed
+  clusters, names mixing problems). The replay's pool window (Q9) counts from now, so replay fresh runs.
+- **Upkeep:** a new table the clusterer reads goes in `sweep.COPIED_TABLES`; once an LLM decides assign's
+  middle band (post-MVP), the replay needs a switch to skip or fake it, or every threshold pays for it.
+- **Later:** separate thresholds for joining and for forming clusters, and merging a would-be cluster into
+  a near-duplicate (Laminar has both); calibrating on a second labelled app.
+
 ## The seam between the two halves
 
 The work is split at `event_embeddings`. See `HANDOFF_PREPARE.md` and `HANDOFF_GROUPING.md`.
@@ -177,7 +205,7 @@ The work is split at `event_embeddings`. See `HANDOFF_PREPARE.md` and `HANDOFF_G
 | | Prepare half | Grouping half |
 |---|---|---|
 | Owns | `event_summaries` (new), writes `event_embeddings` | `clusters`, `cluster_members`, the loop, the health check |
-| Code | `tripwire/clusterer/summarize.py`, `llm_client.py`, `embed.py`, `prepare.py` | `tripwire/clusterer/assign.py`, `pool.py`, `naming.py`, `health.py`, `__main__.py` |
+| Code | `tripwire/clusterer/summarize.py`, `llm_client.py`, `embed.py`, `prepare.py` | `tripwire/clusterer/assign.py`, `pool.py`, `naming.py`, `health.py`, `__main__.py`; calibration: `report.py`, `sweep.py` |
 | Interface | `Preparer.prepare_events(conn, limit) -> counts` (non-zero counts only): summarizes then embeds up to `limit` events, live first, committing per event; stops starting summaries after 60 s or a service error | The loop calls `prepare_events`, then steps 2–5 |
 | Reads from the other half | nothing | `event_embeddings.embedding`; `event_summaries.summary` (naming), `.status` (health) |
 
