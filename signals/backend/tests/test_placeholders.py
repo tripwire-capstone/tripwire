@@ -2,7 +2,10 @@
 
 import uuid
 
+import pytest
+
 from tripwire.clusterer.cluster import cluster_step
+from tripwire.judge.config import JudgeModelConfigError
 from tripwire.placeholder import picked
 from tripwire.runner.run import run_step
 from tripwire.seed import seed
@@ -37,13 +40,29 @@ def count(conn, table):
 
 # ------------------------------------------------------------------ seed
 
-def test_seed_creates_project_signal_version_and_cluster_once(conn):
+def test_seed_creates_project_signal_version_and_cluster_once(conn, monkeypatch):
     assert seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh", key_hint="abcd")
+    monkeypatch.delenv("JUDGE_DEFAULT_MODEL")
     assert not seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh", key_hint="abcd")
     assert [count(conn, t) for t in ("signals", "signal_versions", "clusters")] == [1, 1, 1]
+    assert conn.execute("SELECT model FROM signal_versions").fetchone()[0] == "gpt-6-luna"
     key, hint = conn.execute("SELECT laminar_api_key_encrypted, laminar_api_key_hint FROM projects "
                              "WHERE name = 'default'").fetchone()
     assert bytes(key) == b"not-encrypted-yet" and hint == "abcd"   # never the real key
+
+
+@pytest.mark.parametrize("configured", [None, "placeholder"])
+def test_fresh_seed_requires_a_model_before_writing(conn, monkeypatch, configured):
+    if configured is None:
+        monkeypatch.delenv("JUDGE_DEFAULT_MODEL")
+    else:
+        monkeypatch.setenv("JUDGE_DEFAULT_MODEL", configured)
+
+    with pytest.raises(JudgeModelConfigError, match="JUDGE_DEFAULT_MODEL"):
+        seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh", key_hint="abcd")
+    assert [count(conn, t) for t in ("projects", "signals", "signal_versions", "clusters")] == [
+        1, 0, 0, 0,
+    ]
 
 
 # ------------------------------------------------------------------ runner

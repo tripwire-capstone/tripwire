@@ -14,6 +14,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict
 
+from ..judge.config import JudgeModelConfigError, configured_judge_model
 from ..judge.judge import judge
 from ..judge.types import JudgeError, SignalVersion, TraceRow
 from ..judge.laminar import JudgeLaminarSQL
@@ -93,11 +94,18 @@ def check(body):
 
 def definition(body):
     """The parts of a signal that make up a version, in their stored form."""
+    model = (body.model or "").strip()
+    if not model:
+        try:
+            model = configured_judge_model()
+        except JudgeModelConfigError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     return {"instruction": body.instruction.strip(),
             "output_schema": normalize_fields(body.output_schema),
             "filters": body.filters,
             "critical_guidance": body.critical_guidance.strip() if body.critical_guidance else None,
-            "model": body.model or os.environ.get("JUDGE_DEFAULT_MODEL", "stub")}
+            "model": model}
 
 
 def stored(params):
@@ -114,11 +122,15 @@ def the_project(conn):
     return rows[0][0]
 
 
-def current(conn, signal_id):
+def current_row(conn, signal_id):
     row = conn.cursor(row_factory=dict_row).execute(CURRENT_SQL, (signal_id,)).fetchone()
     if row is None:
         raise HTTPException(404, "signal not found")
-    return SignalOut(**row)
+    return row
+
+
+def current(conn, signal_id):
+    return SignalOut(**current_row(conn, signal_id))
 
 
 def duplicate_name(name):
@@ -138,12 +150,13 @@ def create_signal(body: SignalCreate, conn=Depends(get_conn)):
     check(body)
     project_id = the_project(conn)
     name = body.name.strip()
+    new = definition(body)
     try:
         with conn.transaction():
             signal_id = conn.execute(
                 "INSERT INTO signals (project_id, name, template) VALUES (%s, %s, %s) RETURNING id",
                 (project_id, name, body.template)).fetchone()[0]
-            conn.execute(INSERT_VERSION_SQL, stored({"signal_id": signal_id, "number": 1, **definition(body)}))
+            conn.execute(INSERT_VERSION_SQL, stored({"signal_id": signal_id, "number": 1, **new}))
     except psycopg.errors.UniqueViolation:
         raise duplicate_name(name)
     return current(conn, signal_id)
@@ -164,13 +177,14 @@ def edit_signal(signal_id: int, body: SignalEdit, conn=Depends(get_conn)):
             # Lock the signal so two edits at once take turns instead of both making "version N+1".
             if conn.execute("SELECT 1 FROM signals WHERE id = %s FOR UPDATE", (signal_id,)).fetchone() is None:
                 raise HTTPException(404, "signal not found")
-            now = current(conn, signal_id)
-            if name != now.name:
+            # A replacement definition can upgrade a legacy schema to the current field list.
+            now = current_row(conn, signal_id)
+            if name != now["name"]:
                 conn.execute("UPDATE signals SET name = %s WHERE id = %s", (name, signal_id))
-            old = {key: getattr(now, key) for key in new}
+            old = {key: now[key] for key in new}
             if new != old:
                 conn.execute(INSERT_VERSION_SQL, stored({"signal_id": signal_id,
-                                                         "number": now.version_number + 1, **new}))
+                                                         "number": now["version_number"] + 1, **new}))
     except psycopg.errors.UniqueViolation:
         raise duplicate_name(name)
     return current(conn, signal_id)
