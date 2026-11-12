@@ -1,7 +1,9 @@
 import uuid
+from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
+from psycopg.types.json import Jsonb
 
 from tripwire.api.app import app, get_judge
 from tripwire.api.db import get_conn
@@ -46,9 +48,26 @@ def test_create_makes_a_signal_with_version_1(client):
                                         "description": "The invented fact", "nullable": False}
 
 
-def test_model_defaults_to_the_env_var(client, monkeypatch):
-    monkeypatch.setenv("JUDGE_DEFAULT_MODEL", "judge-model-x")
-    assert create(client).json()["model"] == "judge-model-x"
+@pytest.mark.parametrize("model", [None, "", "  "])
+def test_blank_model_defaults_to_the_env_var(client, model):
+    response = create(client, model=model)
+    assert response.status_code == 201
+    assert response.json()["model"] == "gpt-6-luna"
+
+
+@pytest.mark.parametrize("configured", [None, " ", "stub", "placeholder"])
+def test_invalid_default_requires_an_explicit_model(client, conn, monkeypatch, configured):
+    if configured is None:
+        monkeypatch.delenv("JUDGE_DEFAULT_MODEL")
+    else:
+        monkeypatch.setenv("JUDGE_DEFAULT_MODEL", configured)
+
+    response = create(client)
+    assert response.status_code == 503
+    assert "JUDGE_DEFAULT_MODEL" in response.json()["detail"]
+    assert conn.execute("SELECT count(*) FROM signals").fetchone()[0] == 0
+    assert versions(conn) == 0
+    assert create(client, model="gpt-5.4-mini").json()["model"] == "gpt-5.4-mini"
 
 
 def test_invalid_definition_lists_every_problem(client):
@@ -100,6 +119,35 @@ def test_changed_definition_makes_a_new_version_and_keeps_the_old(client, conn):
     assert r.json()["version_number"] == 2
     assert conn.execute("SELECT instruction FROM signal_versions ORDER BY version_number").fetchall() == \
         [(VALID["instruction"],), ("New wording.",)]
+
+
+@pytest.mark.parametrize(("model_fields", "expected"), [
+    ({}, "gpt-6-luna"),
+    ({"model": "gpt-5.4-mini"}, "gpt-5.4-mini"),
+])
+def test_edit_selects_model_for_new_version(client, conn, model_fields, expected):
+    signal_id = create(client, model="older-model").json()["id"]
+    response = client.put(f"/api/signals/{signal_id}", json={**VALID, **model_fields})
+    assert response.status_code == 200
+    assert response.json()["model"] == expected
+    assert conn.execute("SELECT model FROM signal_versions ORDER BY version_number").fetchall() == [
+        ("older-model",), (expected,),
+    ]
+
+
+def test_edit_can_replace_legacy_schema_and_model(client, conn):
+    signal = create(client).json()
+    legacy_schema = {"type": "object", "properties": {"claim": {"type": "string"}}}
+    conn.execute("UPDATE signal_versions SET output_schema = %s, model = 'placeholder' WHERE id = %s",
+                 (Jsonb(legacy_schema), signal["version_id"]))
+
+    response = client.put(f"/api/signals/{signal['id']}", json=VALID)
+
+    assert response.status_code == 200
+    assert response.json()["version_number"] == 2
+    assert response.json()["model"] == "gpt-6-luna"
+    assert conn.execute("SELECT output_schema, model FROM signal_versions WHERE id = %s",
+                        (signal["version_id"],)).fetchone() == (legacy_schema, "placeholder")
 
 
 def test_unchanged_save_makes_no_version(client, conn):
@@ -219,15 +267,23 @@ def fake_judge(outcome):
     return lambda: judge_fn
 
 
-def test_run_returns_findings_and_writes_nothing(client, conn):
+@pytest.mark.parametrize(("model_fields", "expected"), [
+    ({}, "gpt-6-luna"),
+    ({"model": "gpt-5.4-mini"}, "gpt-5.4-mini"),
+])
+def test_run_returns_findings_and_writes_nothing(client, conn, model_fields, expected):
     version_id = create(client).json()["version_id"]
     laminar_id, _ = add_turn(conn, version_id)
     runs_before = conn.execute("SELECT count(*) FROM signal_runs").fetchone()[0]
-    app.dependency_overrides[get_judge] = fake_judge(JudgeResult(
+    judge_fn = Mock(return_value=JudgeResult(
         findings=[Finding("critical", ["span-9"], {"claim": "17.3 miles"}, ["S4"])], analysis="why",
         raw_output="{}", judge_input="trace", dropped_findings=0, model="m", usage=Usage(10, 0, 5, 0.001)))
-    r = client.post("/api/test-run", json={"laminar_trace_id": laminar_id, "definition": VALID})
+    app.dependency_overrides[get_judge] = lambda: judge_fn
+    r = client.post("/api/test-run", json={
+        "laminar_trace_id": laminar_id, "definition": {**VALID, **model_fields},
+    })
     assert r.status_code == 200
+    assert judge_fn.call_args.args[2].model == expected
     assert r.json()["findings"] == [{"severity": "critical", "fields": {"claim": "17.3 miles"},
                                      "evidence_labels": ["S4"], "span_ids": ["span-9"]}]
     assert conn.execute("SELECT count(*) FROM signal_runs").fetchone()[0] == runs_before

@@ -18,10 +18,11 @@ MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 
 
 @pytest.fixture
-def conn():
+def conn(monkeypatch):
     url = os.environ.get("TEST_DATABASE_URL")
     if not url:
         pytest.skip("set TEST_DATABASE_URL to run the Postgres tests")
+    monkeypatch.setenv("JUDGE_DEFAULT_MODEL", "gpt-6-luna")
     import psycopg
     schema = f"test_{uuid.uuid4().hex[:8]}"
     with psycopg.connect(url, autocommit=True) as c:
