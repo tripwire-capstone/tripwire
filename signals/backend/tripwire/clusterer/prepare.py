@@ -26,8 +26,8 @@ from datetime import datetime, timezone
 
 import psycopg
 
+from ..llm import LLMServiceError
 from .embed import save_embedding
-from .llm_client import LLMServiceError
 from .summarize import crash_update, load_prompt, load_row, save, summarize_event
 
 log = logging.getLogger("clusterer.prepare")

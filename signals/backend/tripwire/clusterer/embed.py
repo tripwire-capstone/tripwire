@@ -10,7 +10,8 @@ import hashlib
 import math
 
 from ..placeholder import vector_text
-from .llm_client import REQUEST_TIMEOUT_SECONDS, LLMServiceError
+from ..llm import LLMServiceError
+from .llm_client import REQUEST_TIMEOUT_SECONDS
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 DIMENSIONS = 1536       # event_embeddings.embedding is vector(1536)

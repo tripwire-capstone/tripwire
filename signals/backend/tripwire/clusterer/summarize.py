@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
-from .llm_client import LLMBadOutput, LLMError, LLMInputTooLong, LLMRefused, LLMServiceError, Usage
+from ..llm import LLMBadOutput, LLMError, LLMInputTooLong, LLMRefused, LLMServiceError
 from .sql import event_signal
 
 log = logging.getLogger("clusterer.summarize")
