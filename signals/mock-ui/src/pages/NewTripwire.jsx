@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { Drawer, Text } from '@mantine/core';
 import { useReducedMotion } from '@mantine/hooks';
 import { useNavigate } from 'react-router-dom';
-import { tripwireListUrl } from '../components/links';
+import { createSignal, testRun } from '../api';
+import { tripwireListUrl, tripwireUrl } from '../components/links';
 import TripwireForm from '../components/TripwireForm';
 import TripwireList from './TripwireList';
 
@@ -31,7 +32,11 @@ export default function NewTripwire() {
         transitionProps: { duration: reducedMotion ? 0 : 150, exitDuration: reducedMotion ? 0 : 150,
           timingFunction: 'cubic-bezier(.4,0,.2,1)' } }}
       closeButtonProps={{ 'aria-label': 'Close new signal' }}>
-      <TripwireForm mode="create" onCancel={close} />
+      <TripwireForm mode="create" onCancel={close} onTest={testRun}
+        onSubmit={async (values) => {
+          const saved = await createSignal(values);
+          navigate(tripwireUrl(saved.id)); // open the new signal's page
+        }} />
     </Drawer>
   </>;
 }

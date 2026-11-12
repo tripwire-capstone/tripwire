@@ -11,9 +11,11 @@ import { formatTime } from './format';
 // a typed duration ("4 hours, 8 days"), presets, and an absolute date range.
 // It reads and writes the page address (?pastHours= or ?startDate=&endDate=).
 // defaultHours: the range shown when the address has none (must match the page's own rangeFromParams call).
-export default function TimeRangePicker({ defaultHours }) {
+// now: pages on real data pass the real clock; mock pages leave it out and use the story clock.
+export default function TimeRangePicker({ defaultHours, now }) {
   const [params, setParams] = useSearchParams();
-  const { asOf } = useStoryData();
+  const story = useStoryData();
+  const asOf = now ?? story.asOf;
   const range = rangeFromParams(params, asOf, defaultHours);
   const [opened, setOpened] = useState(false);
   const [view, setView] = useState('menu'); // 'menu' | 'calendar'

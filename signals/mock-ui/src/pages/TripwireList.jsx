@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ActionIcon,
+  Alert,
   Anchor,
   Button,
   Checkbox,
@@ -17,12 +18,20 @@ import { Link, useNavigate } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import { StatusBadge } from "../components/Badges";
 import { ActivitySparkline } from "../components/Charts";
-import { useStoryData } from "../components/StoryClock";
+import { FEATURES, useSignals } from "../api";
 import { formatDay, formatTime, plural } from "../components/format";
 import { newTripwireUrl, tripwireUrl } from "../components/links";
 
-// Mock deletion survives navigation, but resets on a browser refresh.
+// Deletion only hides rows until a refresh: there is no delete endpoint yet (FEATURES.deleteSignals).
 let deletedTripwireIds = new Set();
+
+// From the start of the day `days - 1` days ago until now, in the pages' time format (UTC, no zone).
+function lastDays(days) {
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - days + 1));
+  const pageTime = (d) => d.toISOString().slice(0, 19);
+  return { start: pageTime(start), end: pageTime(now) };
+}
 
 function Icon({ name }) {
   return (
@@ -67,24 +76,25 @@ function Count({ children }) {
 }
 
 export default function TripwireList() {
-  const { tripwires, tripwireSummary, asOf } = useStoryData();
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [days, setDays] = useState("7");
+  // Computed once per choice of range, so the list doesn't reload on every render.
+  const range = useMemo(() => lastDays(Number(days)), [days]);
+  const { data, error, loading, reload } = useSignals(range);
   const [deleted, setDeleted] = useState(deletedTripwireIds);
   const [selected, setSelected] = useState(new Set());
   const [confirming, setConfirming] = useState(false);
   const [notice, setNotice] = useState("");
-  const available = tripwires.filter((t) => !deleted.has(t.id));
-  const rows = available
-    .filter((t) => t.name.toLowerCase().includes(search.trim().toLowerCase()))
-    .map((t) => tripwireSummary(t.id, { days: Number(days) }));
+  const available = (data ?? []).filter((t) => !deleted.has(t.id));
+  const rows = available.filter((t) =>
+    t.name.toLowerCase().includes(search.trim().toLowerCase()),
+  );
   const selectedIds = available
     .filter((t) => selected.has(t.id))
     .map((t) => t.id);
   const allSelected = rows.length > 0 && rows.every((t) => selected.has(t.id));
   const someSelected = rows.some((t) => selected.has(t.id));
-  const rangeStart = rows[0]?.rangeStart;
 
   function toggle(id, checked) {
     setSelected((previous) => {
@@ -102,7 +112,7 @@ export default function TripwireList() {
     setSelected(new Set());
     setConfirming(false);
     setNotice(
-      `${plural(selectedIds.length, "signal")} deleted from this mock. Refresh to restore.`,
+      `${plural(selectedIds.length, "signal")} hidden until you refresh.`,
     );
   }
 
@@ -143,15 +153,23 @@ export default function TripwireList() {
           ]}
         />
       </Group>
+      {error && (
+        <Alert color="red" title="Couldn't load signals">
+          <Group justify="space-between">
+            <Text size="sm">{error.message}</Text>
+            <Button variant="light" color="gray" onClick={reload}>
+              Try again
+            </Button>
+          </Group>
+        </Alert>
+      )}
       <Group justify="space-between">
         <Text size="xs" c="dimmed" aria-live="polite">
-          {plural(rows.length, "signal")}
+          {loading ? "Loading…" : plural(rows.length, "signal")}
         </Text>
-        {rangeStart && (
-          <Text size="xs" c="dimmed">
-            {formatDay(rangeStart)} – {formatDay(asOf.slice(0, 10))}
-          </Text>
-        )}
+        <Text size="xs" c="dimmed">
+          {formatDay(range.start)} – {formatDay(range.end)}
+        </Text>
       </Group>
       <Table.ScrollContainer minWidth={800}>
         <Table
@@ -162,31 +180,33 @@ export default function TripwireList() {
         >
           <Table.Thead>
             <Table.Tr>
-              <Table.Th w={42}>
-                <Checkbox
-                  radius="xs"
-                  aria-label="Select all visible signals"
-                  checked={allSelected}
-                  indeterminate={someSelected && !allSelected}
-                  disabled={!rows.length}
-                  onChange={(event) => {
-                    const checked = event.currentTarget.checked;
-                    setSelected((previous) => {
-                      const next = new Set(previous);
-                      rows.forEach((t) => {
-                        if (checked) next.add(t.id);
-                        else next.delete(t.id);
+              {FEATURES.deleteSignals && (
+                <Table.Th w={42}>
+                  <Checkbox
+                    radius="xs"
+                    aria-label="Select all visible signals"
+                    checked={allSelected}
+                    indeterminate={someSelected && !allSelected}
+                    disabled={!rows.length}
+                    onChange={(event) => {
+                      const checked = event.currentTarget.checked;
+                      setSelected((previous) => {
+                        const next = new Set(previous);
+                        rows.forEach((t) => {
+                          if (checked) next.add(t.id);
+                          else next.delete(t.id);
+                        });
+                        return next;
                       });
-                      return next;
-                    });
-                  }}
-                />
-              </Table.Th>
+                    }}
+                  />
+                </Table.Th>
+              )}
               <Table.Th>Status</Table.Th>
               <Table.Th>Name</Table.Th>
               <Table.Th ta="right">Events</Table.Th>
-              <Table.Th ta="right">Clusters</Table.Th>
-              <Table.Th>Activity</Table.Th>
+              {FEATURES.clusterCounts && <Table.Th ta="right">Clusters</Table.Th>}
+              {FEATURES.activityColumn && <Table.Th>Activity</Table.Th>}
               <Table.Th>Last event</Table.Th>
               <Table.Th ta="right">Runs</Table.Th>
               <Table.Th>Created</Table.Th>
@@ -204,16 +224,18 @@ export default function TripwireList() {
                 }
                 style={{ cursor: "pointer" }}
               >
-                <Table.Td onClick={(event) => event.stopPropagation()}>
-                  <Checkbox
-                    radius="xs"
-                    aria-label={`Select ${t.name}`}
-                    checked={selected.has(t.id)}
-                    onChange={(event) =>
-                      toggle(t.id, event.currentTarget.checked)
-                    }
-                  />
-                </Table.Td>
+                {FEATURES.deleteSignals && (
+                  <Table.Td onClick={(event) => event.stopPropagation()}>
+                    <Checkbox
+                      radius="xs"
+                      aria-label={`Select ${t.name}`}
+                      checked={selected.has(t.id)}
+                      onChange={(event) =>
+                        toggle(t.id, event.currentTarget.checked)
+                      }
+                    />
+                  </Table.Td>
+                )}
                 <Table.Td>
                   <StatusBadge status={t.status} />
                 </Table.Td>
@@ -232,12 +254,16 @@ export default function TripwireList() {
                 <Table.Td ta="right">
                   <Count>{t.events}</Count>
                 </Table.Td>
-                <Table.Td ta="right">
-                  <Count>{t.clusters}</Count>
-                </Table.Td>
-                <Table.Td>
-                  <ActivitySparkline data={t.activity} w={80} />
-                </Table.Td>
+                {FEATURES.clusterCounts && (
+                  <Table.Td ta="right">
+                    <Count>{t.clusters}</Count>
+                  </Table.Td>
+                )}
+                {FEATURES.activityColumn && (
+                  <Table.Td>
+                    <ActivitySparkline data={t.activity} w={80} />
+                  </Table.Td>
+                )}
                 <Table.Td>
                   <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>
                     {t.lastEventAt ? formatTime(t.lastEventAt) : "—"}
@@ -256,7 +282,7 @@ export default function TripwireList() {
           </Table.Tbody>
         </Table>
       </Table.ScrollContainer>
-      {!rows.length && (
+      {!loading && !error && !rows.length && (
         <Stack align="center" py="xl" gap="sm">
           <Text fw={500}>
             {search.trim() ? "No matching signals" : "No signals yet"}
@@ -312,9 +338,6 @@ export default function TripwireList() {
         <Text size="sm">
           Are you sure you want to delete{" "}
           {plural(selectedIds.length, "signal")}?
-        </Text>
-        <Text size="sm" c="dimmed" mt="xs">
-          This only removes them from the mock list until you refresh.
         </Text>
         <Group justify="flex-end" mt="lg">
           <Button
