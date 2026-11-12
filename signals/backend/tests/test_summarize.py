@@ -7,16 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from tests.clustering_data import add_signal, add_version
-from tripwire.clusterer.llm_client import (
-    FakeLLM,
-    LLMBadOutput,
-    LLMInputTooLong,
-    LLMRefused,
-    LLMResult,
-    LLMServiceError,
-    Usage,
-    price,
-)
+from tripwire.clusterer.llm_client import FakeLLM, LLMResult, price
 from tripwire.clusterer.summarize import (
     EventInput,
     Row,
@@ -28,11 +19,12 @@ from tripwire.clusterer.summarize import (
     save,
     summarize_event,
 )
+from tripwire.llm import LLMBadOutput, LLMInputTooLong, LLMRefused, LLMServiceError, LLMUsage
 
 NOW = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
 GOOD = {"cause": "assistant reply contradicts the trail tool",
         "summary": "The assistant says a closed trail is open, in trail details."}
-USAGE = Usage(input_tokens=1000, cached_input_tokens=0, output_tokens=30, cost_usd=0.000115)
+USAGE = LLMUsage(input_tokens=1000, cached_input_tokens=0, output_tokens=30, cost_usd=0.000115)
 
 
 def event(**overrides):
@@ -185,7 +177,7 @@ def test_refusal_usage_is_added_when_the_error_carries_it():
 
 
 def test_unknown_cost_stays_unknown_instead_of_becoming_zero():
-    unpriced = Usage(input_tokens=500, cached_input_tokens=0, output_tokens=5, cost_usd=None)
+    unpriced = LLMUsage(input_tokens=500, cached_input_tokens=0, output_tokens=5, cost_usd=None)
     assert decide(ok(usage=unpriced), None, NOW).cost_usd is None
     row = Row(attempts=1, input_tokens=500, cached_input_tokens=0, output_tokens=5, cost_usd=None)
     assert decide(ok(), row, NOW).cost_usd is None     # part of the total is unknown

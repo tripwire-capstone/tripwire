@@ -4,7 +4,7 @@ Every query that needs one of these rules builds itself from the pieces below in
 the rule out again, so changing a rule here changes it everywhere. The aliases passed in are
 always fixed names from our own code, never user input.
 
-Used by: assign.py, pool.py, naming.py, health.py, summarize.py. Not used by the placeholder (cluster.py, to be
+Used by: assign.py, pool.py, naming.py, health.py, summarize.py, report.py. Not used by the placeholder (cluster.py, to be
 deleted once the real loop is the default) or check.sql (a plain SQL report that can't import
 Python; it carries a comment pointing here). If something outside Python (e.g. the API) needs "the
 pool", turn POOL into a database view built from the same rule.

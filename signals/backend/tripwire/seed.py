@@ -7,7 +7,8 @@ Creates, once (running it again changes nothing):
 
 Settings (env or .env): DATABASE_URL, LMNR_PROJECT_API_KEY (only its last 4 characters
 are stored, as the hint), LMNR_API_URL (default Laminar Cloud), LMNR_UI_URL,
-LMNR_PROJECT_ID (optional, for "Open in Laminar" links).
+LMNR_PROJECT_ID (optional, for "Open in Laminar" links), and JUDGE_DEFAULT_MODEL
+(required when seeding a new project).
 
 TODO (encrypted keys): the key column gets a placeholder, never the real key in plain
 text. Next step: encrypt LMNR_PROJECT_API_KEY with TRIPWIRE_SECRET_KEY and store that.
@@ -20,6 +21,7 @@ import os
 import psycopg
 from dotenv import load_dotenv
 
+from .judge.config import configured_judge_model
 from .placeholder import FIXED_EMBEDDING, vector_text
 
 log = logging.getLogger("seed")
@@ -40,6 +42,7 @@ def seed(conn, *, api_url, ui_url, key_hint, laminar_project_id=None):
         cur.execute("SELECT 1 FROM projects WHERE name = %s", (PROJECT_NAME,))
         if cur.fetchone():
             return False
+        model = configured_judge_model()
         cur.execute(
             """INSERT INTO projects (name, laminar_api_url, laminar_ui_url, laminar_project_id,
                                      laminar_api_key_encrypted, laminar_api_key_hint)
@@ -52,8 +55,8 @@ def seed(conn, *, api_url, ui_url, key_hint, laminar_project_id=None):
         signal_id = cur.fetchone()[0]
         cur.execute(
             """INSERT INTO signal_versions (signal_id, version_number, instruction, output_schema, model)
-               VALUES (%s, 1, %s, %s, 'placeholder')""",
-            (signal_id, INSTRUCTION, json.dumps(OUTPUT_SCHEMA)),
+               VALUES (%s, 1, %s, %s, %s)""",
+            (signal_id, INSTRUCTION, json.dumps(OUTPUT_SCHEMA), model),
         )
         cur.execute(
             """INSERT INTO clusters (signal_id, name, description, centroid)

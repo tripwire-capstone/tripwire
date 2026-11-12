@@ -7,10 +7,11 @@ import pytest
 from tests.clustering_data import add_event, add_failed_summary, add_signal, add_summary
 from tripwire.clusterer import prepare as prepare_module
 from tripwire.clusterer.embed import FakeEmbedder
-from tripwire.clusterer.llm_client import FakeLLM, LLMBadOutput, LLMServiceError
+from tripwire.clusterer.llm_client import FakeLLM
 from tripwire.clusterer.loop import run_pass
 from tripwire.clusterer.prepare import Preparer
 from tripwire.clusterer.settings import load_settings
+from tripwire.llm import LLMBadOutput, LLMServiceError
 
 NOW = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
 GOOD = {"cause": "assistant reply", "summary": "The assistant gives a wrong answer, in booking."}
