@@ -1,6 +1,7 @@
+import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Anchor, Box, Button, Group, Paper, Select, SimpleGrid, Stack, Text, Title, UnstyledButton } from '@mantine/core';
-import { useStoryData } from '../components/StoryClock';
+import { Alert, Anchor, Box, Button, Group, Paper, Select, SimpleGrid, Stack, Text, Title, UnstyledButton } from '@mantine/core';
+import { useOverview } from '../api';
 import { ToggleLineChart } from '../components/Charts';
 import TimeRangePicker from '../components/TimeRangePicker';
 import { formatCost, plural } from '../components/format';
@@ -9,26 +10,27 @@ import { rangeFromParams, makeBuckets, bucketIndex } from '../components/timeRan
 import { clusterColor, UNCLUSTERED_COLOR, RUN_COLORS } from '../theme';
 
 // Home: a fixed dashboard for signals, built from Laminar's dashboard card types
-// (ranked lists and charts over time). Not customizable.
+// (ranked lists and charts over time). Not customizable. Reads /api/overview: every number is
+// counted in the database, by when the turn happened.
 // Address: /?pastHours=168&granularity=hour|day
 
 const DEFAULT_HOURS = 24; // past 24 hours
 const TOP = 5;
 
+// "Now" in the pages' time format (UTC, no zone). Read once, and again when Refresh is clicked.
+const currentTime = () => new Date().toISOString().slice(0, 19);
+
 export default function Home() {
   const [params, setParams] = useSearchParams();
-  const data = useStoryData();
-  const range = rangeFromParams(params, data.asOf, DEFAULT_HOURS);
+  const [now, setNow] = useState(currentTime);
+  const range = rangeFromParams(params, now, DEFAULT_HOURS);
   // By hour for ranges up to 7 days, by day for longer ones, unless chosen.
   const granularity = ['hour', 'day'].includes(params.get('granularity')) ? params.get('granularity') : (range.hours <= 168 ? 'hour' : 'day');
   const minutes = granularity === 'hour' ? 60 : 1440;
   const buckets = makeBuckets(range.start, range.end, minutes);
   const setGranularity = (g) => { const next = new URLSearchParams(params); next.set('granularity', g); setParams(next); };
-
-  const inRange = (x) => x.time >= range.start && x.time <= range.end;
-  const events = data.tripwireEvents.filter(inRange);
-  const runs = data.runs.filter(inRange);
-  const nameOf = (id) => data.getTripwire(id)?.name ?? id;
+  const { data, error, loading } = useOverview(range, minutes);
+  const overview = data ?? { signals: [], problemClusters: [], problemCounts: [], runCounts: [] };
 
   // Top N by a number; ties broken by name; zeros left out.
   const top = (items, value, label) => items
@@ -36,41 +38,30 @@ export default function Home() {
     .sort((a, b) => b.value - a.value || label(a).localeCompare(label(b)));
 
   // "Problem" = critical or warning. Counting only these keeps signals that produce an event for every
-  // trace (Intent Classifier, Task Evaluator's successes) from turning the event cards into a traffic count.
-  const isProblem = (e) => e.severity === 'critical' || e.severity === 'warning';
-  const problems = events.filter(isProblem);
-  const byProblems = top(data.tripwires, (t) => problems.filter((e) => e.tripwireId === t.id).length, (t) => t.name);
-  const byCluster = top(data.clusters.filter((c) => c.parentId), (c) => problems.filter((e) => e.clusterId === c.id).length, (c) => c.name);
-  const byCost = top(data.tripwires, (t) => runs.filter((r) => r.tripwireId === t.id).reduce((sum, r) => sum + r.cost, 0), (t) => t.name);
-  const totalCost = runs.reduce((sum, r) => sum + r.cost, 0);
+  // trace from turning the event cards into a traffic count.
+  const signals = overview.signals;
+  const byProblems = top(signals, (s) => s.problemEvents, (s) => s.name);
+  const totalProblems = byProblems.reduce((sum, s) => sum + s.value, 0);
+  const byCost = top(signals, (s) => s.cost, (s) => s.name);
+  const totalCost = signals.reduce((sum, s) => sum + s.cost, 0);
+  const unpriced = signals.reduce((sum, s) => sum + s.unpricedRuns, 0);
 
-  // Intent breakdown: only when a signal created from the Intent template exists (survives renames).
-  const intentSignal = data.tripwires.find((t) => t.templateId === 'intent');
-  const intentEvents = intentSignal ? events.filter((e) => e.tripwireId === intentSignal.id) : [];
-  const byIntent = intentSignal
-    ? top(data.leafClusters(intentSignal.id), (c) => intentEvents.filter((e) => e.clusterId === c.id).length, (c) => c.name)
-    : [];
-  const pct = (n) => `${Math.round((n / intentEvents.length) * 100)}%`;
-
-  // Chart rows: one per bucket; top 5 signals get their own line, the rest are summed into "Other".
-  const perSignalSeries = (ranked, items) => {
-    const shown = ranked.slice(0, TOP);
-    // A signal keeps one color on every card (by its place in the signal list, not its rank in this chart).
-    const series = shown.map((t) => ({ name: t.id, label: t.name, color: clusterColor(data.tripwires.findIndex((x) => x.id === t.id)) }));
-    const hasOther = ranked.length > TOP;
-    if (hasOther) series.push({ name: 'other', label: 'Other', color: UNCLUSTERED_COLOR });
-    const rows = buckets.map((b) => Object.fromEntries([['bucket', b.start], ...series.map((s) => [s.name, 0])]));
-    for (const x of items) {
-      const i = bucketIndex(buckets, x.time);
-      if (i < 0) continue;
-      const key = shown.some((t) => t.id === x.tripwireId) ? x.tripwireId : (hasOther ? 'other' : null);
-      if (key) rows[i][key] += 1;
-    }
-    return { series, rows, shown };
-  };
-  const problemsChart = perSignalSeries(byProblems, problems);
+  // Problem events over time: the top 5 signals get their own line, the rest are summed into "Other".
+  const shown = byProblems.slice(0, TOP);
+  // A signal keeps one color on every card (by its place in the signal list, not its rank in this chart).
+  const problemSeries = shown.map((s) => ({ name: String(s.id), label: s.name, color: clusterColor(signals.findIndex((x) => x.id === s.id)) }));
+  if (byProblems.length > TOP) problemSeries.push({ name: 'other', label: 'Other', color: UNCLUSTERED_COLOR });
+  const problemRows = buckets.map((b) => Object.fromEntries([['bucket', b.start], ...problemSeries.map((x) => [x.name, 0])]));
+  for (const c of overview.problemCounts) {
+    const i = bucketIndex(buckets, c.bucket);
+    if (i < 0) continue;
+    const key = shown.some((s) => s.id === c.signalId) ? String(c.signalId) : 'other';
+    if (key in problemRows[i]) problemRows[i][key] += c.count;
+  }
   // Legend link for a signal line ("Other" has no page).
   const signalLink = (series) => (series.name === 'other' ? null : tripwireUrl(series.name, { range }));
+
+  // Finished runs only: a run still waiting or in progress isn't counted until it finishes.
   const runSeries = [
     { name: 'event', label: 'Found an event', color: RUN_COLORS.event },
     { name: 'noEvent', label: 'Found nothing', color: RUN_COLORS.noEvent },
@@ -78,51 +69,50 @@ export default function Home() {
       description: "Couldn't finish: model error, unusable output, or the trace couldn't be read." },
   ];
   const runRows = buckets.map((b) => ({ bucket: b.start, event: 0, noEvent: 0, failed: 0 }));
-  for (const r of runs) {
-    const i = bucketIndex(buckets, r.time);
-    if (i >= 0) runRows[i][r.status === 'failed' ? 'failed' : r.eventId ? 'event' : 'noEvent'] += 1;
+  let finishedRuns = 0;
+  for (const c of overview.runCounts) {
+    const i = bucketIndex(buckets, c.bucket);
+    if (i < 0) continue;
+    for (const k of ['event', 'noEvent', 'failed']) { runRows[i][k] += c[k]; finishedRuns += c[k]; }
   }
 
   return (
     <Stack gap="md">
       <Group gap="sm" wrap="wrap">
         <Title order={3}>Home</Title>
-        <TimeRangePicker defaultHours={DEFAULT_HOURS} />
+        <TimeRangePicker defaultHours={DEFAULT_HOURS} now={now} />
         <Select id="home-granularity" size="xs" w={110} allowDeselect={false} value={granularity} onChange={setGranularity}
           data={[{ value: 'hour', label: 'By hour' }, { value: 'day', label: 'By day' }]} aria-label="Chart granularity" />
-        <Button variant="default" size="xs">↻ Refresh</Button>
+        <Button variant="default" size="xs" loading={loading && Boolean(data)} onClick={() => setNow(currentTime())}>↻ Refresh</Button>
       </Group>
+      {error && <Alert color="red" title="Couldn't load">{error.message}</Alert>}
+      {loading && !data && <Text c="dimmed">Loading…</Text>}
 
       <SimpleGrid cols={{ base: 1, md: 3 }}>
-        <Card title="Problem events by signal" note="Critical and warning events" total={problems.length}
+        <Card title="Problem events by signal" note="Critical and warning events" total={totalProblems}
           footer={<Anchor component={Link} to={tripwireListUrl()} size="sm">View all signals →</Anchor>}>
-          <RankedList rows={byProblems.slice(0, TOP).map((t) => ({ key: t.id, label: t.name, value: t.value, to: tripwireUrl(t.id, { range }) }))} />
+          <RankedList rows={byProblems.slice(0, TOP).map((s) => ({ key: s.id, label: s.name, value: s.value, to: tripwireUrl(s.id, { range }) }))} />
         </Card>
-        <Card title="Top problem clusters" note="Ranked by critical and warning events" total={byCluster.length} totalLabel={plural(byCluster.length, 'cluster')}>
-          <RankedList rows={byCluster.slice(0, TOP).map((c) => ({
-            key: c.id, label: c.name, sub: nameOf(c.tripwireId), value: c.value, to: tripwireUrl(c.tripwireId, { clusterId: c.id, range }),
+        <Card title="Top problem clusters" note="Ranked by critical and warning events" total={overview.problemClusters.length}
+          totalLabel={plural(overview.problemClusters.length, 'cluster')}>
+          <RankedList rows={overview.problemClusters.slice(0, TOP).map((c) => ({
+            key: c.id, label: c.name, sub: c.signalName, value: c.problemEvents, to: tripwireUrl(c.signalId, { clusterId: c.id, range }),
           }))} />
         </Card>
-        <Card title="Signal run cost" totalLabel={formatCost(totalCost)}>
-          <RankedList rows={byCost.slice(0, TOP).map((t) => ({ key: t.id, label: t.name, value: t.value, display: formatCost(t.value), to: tripwireUrl(t.id, { tab: 'runs', range }) }))} />
+        <Card title="Signal run cost" note={unpriced ? `${plural(unpriced, 'run')} without a known price not included` : undefined}
+          totalLabel={formatCost(totalCost)}>
+          <RankedList rows={byCost.slice(0, TOP).map((s) => ({ key: s.id, label: s.name, value: s.value, display: formatCost(s.value), to: tripwireUrl(s.id, { tab: 'runs', range }) }))} />
         </Card>
       </SimpleGrid>
 
-      <SimpleGrid cols={{ base: 1, md: 3 }}>
+      <SimpleGrid cols={{ base: 1, md: 2 }}>
         <Card title="Problem events over time" note="Critical and warning events">
-          {problems.length === 0
+          {totalProblems === 0
             ? <Empty text="No problem events in this time range." />
-            : <ToggleLineChart data={problemsChart.rows} series={problemsChart.series} minutes={minutes} linkFor={signalLink} />}
+            : <ToggleLineChart data={problemRows} series={problemSeries} minutes={minutes} linkFor={signalLink} />}
         </Card>
-        {intentSignal && (
-          <Card title="What visitors asked for" note={`From ${intentSignal.name}`} total={intentEvents.length} totalLabel={plural(intentEvents.length, 'conversation turn')}>
-            <RankedList rows={byIntent.slice(0, TOP).map((c) => ({
-              key: c.id, label: c.name, value: c.value, display: `${c.value} · ${pct(c.value)}`,
-              to: tripwireUrl(intentSignal.id, { clusterId: c.id, range }),
-            }))} />
-          </Card>
-        )}
-        <Card title="Signal runs (all signals)" note="Each run is one signal reading one trace" total={runs.length} totalLabel={plural(runs.length, 'run')}>
+        <Card title="Signal runs (all signals)" note="Finished runs; each is one signal reading one trace" total={finishedRuns}
+          totalLabel={plural(finishedRuns, 'run')}>
           <ToggleLineChart data={runRows} series={runSeries} minutes={minutes} />
         </Card>
       </SimpleGrid>

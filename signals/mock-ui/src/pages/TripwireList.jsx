@@ -25,10 +25,10 @@ import { newTripwireUrl, tripwireUrl } from "../components/links";
 // Deletion only hides rows until a refresh: there is no delete endpoint yet (FEATURES.deleteSignals).
 let deletedTripwireIds = new Set();
 
-// From the start of the day `days - 1` days ago until now, in the pages' time format (UTC, no zone).
+// From local midnight `days - 1` days ago until now, in the pages' time format (UTC, no zone).
 function lastDays(days) {
   const now = new Date();
-  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - days + 1));
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - days + 1);
   const pageTime = (d) => d.toISOString().slice(0, 19);
   return { start: pageTime(start), end: pageTime(now) };
 }
@@ -205,8 +205,8 @@ export default function TripwireList() {
               <Table.Th>Status</Table.Th>
               <Table.Th>Name</Table.Th>
               <Table.Th ta="right">Events</Table.Th>
-              {FEATURES.clusterCounts && <Table.Th ta="right">Clusters</Table.Th>}
-              {FEATURES.activityColumn && <Table.Th>Activity</Table.Th>}
+              <Table.Th ta="right">Clusters</Table.Th>
+              <Table.Th>Activity</Table.Th>
               <Table.Th>Last event</Table.Th>
               <Table.Th ta="right">Runs</Table.Th>
               <Table.Th>Created</Table.Th>
@@ -254,16 +254,12 @@ export default function TripwireList() {
                 <Table.Td ta="right">
                   <Count>{t.events}</Count>
                 </Table.Td>
-                {FEATURES.clusterCounts && (
-                  <Table.Td ta="right">
+                                  <Table.Td ta="right">
                     <Count>{t.clusters}</Count>
                   </Table.Td>
-                )}
-                {FEATURES.activityColumn && (
-                  <Table.Td>
+                                  <Table.Td>
                     <ActivitySparkline data={t.activity} w={80} />
                   </Table.Td>
-                )}
                 <Table.Td>
                   <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>
                     {t.lastEventAt ? formatTime(t.lastEventAt) : "—"}

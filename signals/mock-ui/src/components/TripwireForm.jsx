@@ -20,10 +20,9 @@ import {
   Tooltip,
   UnstyledButton,
 } from "@mantine/core";
-import { FEATURES } from "../api";
+import { FEATURES, TEMPLATES } from "../api";
 import { SeverityBadge } from "./Badges";
-import { useStoryData } from "./StoryClock";
-import { formatCost, formatTime } from "./format";
+import { formatCost } from "./format";
 import classes from "./TripwireForm.module.css";
 
 const TYPES = [
@@ -219,8 +218,7 @@ function TemplateButton({ template, selected, onSelect }) {
  * Reusable in a drawer or a settings page; no routing or persistence of its own.
  * initialValues: tripwire record to prefill; mode: 'create' (default) or 'edit'.
  * onSubmit(values): optional async save handler. Without it, saves are simulated.
- * onTest(traceId, values): optional async test-on-a-trace handler. Without it, the test panel
- *   shows the mock's scripted sample results.
+ * onTest(traceId, values): async test-on-a-trace handler. Without it, the test panel is hidden.
  * onCancel(): optional parent dismissal handler.
  * Changing the mode or supplied values resets the form, but parent rerenders do not.
  */
@@ -248,7 +246,7 @@ const errorText = (error) =>
   Array.isArray(error?.detail) ? error.detail.join(" · ") : error?.message || "Unknown error";
 
 function TripwireFormFields({ initialValues, mode, onSubmit, onTest, onCancel }) {
-  const { tripwireTemplates, sampleTraces } = useStoryData();
+  const tripwireTemplates = TEMPLATES;
   const editing = mode === "edit";
   // With templates hidden, a new signal starts blank instead of from the Friction template.
   const initial = tripwireTemplates.find(
@@ -285,30 +283,10 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onTest, onCancel })
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState({});
   const [notice, setNotice] = useState(null);
-  const [sampleId, setSampleId] = useState(null);
-  const [testResult, setTestResult] = useState(null);
   const [traceId, setTraceId] = useState("");
   const [testing, setTesting] = useState(false);
   const [liveResult, setLiveResult] = useState(null); // { findings, analysis, cost } or { error }
-  const sample = sampleTraces.find((item) => item.id === sampleId);
-  const selectedTemplate = tripwireTemplates.find(
-    (template) => template.id === templateId,
-  );
-  // Scripted results describe the preset only; never pretend to evaluate custom edits.
-  const matchesPreset =
-    selectedTemplate &&
-    instruction === selectedTemplate.instruction &&
-    JSON.stringify(
-      fields.map(({ name, description, type, choices }) => ({
-        name,
-        description,
-        type,
-        choices: listValues(choices),
-      })),
-    ) === JSON.stringify(selectedTemplate.payloadFields);
-
   useEffect(() => {
-    setTestResult(null);
     setLiveResult(null);
     setNotice(null);
   }, [
@@ -319,7 +297,6 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onTest, onCancel })
     spanName,
     filters,
     sampling,
-    sampleId,
     traceId,
     active,
   ]);
@@ -484,13 +461,6 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onTest, onCancel })
     } finally {
       setTesting(false);
     }
-  }
-  function test() {
-    if (!sample || !matchesPreset) return;
-    setTestResult({
-      sampleId: sample.id,
-      payload: sample.results[templateId] ?? null,
-    });
   }
   const blank = {
     id: "blank",
@@ -816,11 +786,10 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onTest, onCancel })
                 : `Read ${sampling}% of matching traces.`}
             </Text>
           </Stack>}
-          <Accordion variant="default">
+          {onTest && <Accordion variant="default">
             <Accordion.Item value="test">
               <Accordion.Control>Test on a sample trace</Accordion.Control>
               <Accordion.Panel>
-                {onTest ? (
                   <Stack gap="sm">
                     <Text size="xs" c="dimmed">
                       Runs the judge on one trace Tripwire has stored, with the form as it is now.
@@ -863,83 +832,9 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onTest, onCancel })
                       </Alert>
                     )}
                   </Stack>
-                ) : (
-                <Stack gap="sm">
-                  <Text size="xs" c="dimmed">
-                    Scripted examples only. The editable instruction, filters,
-                    and sampling are not evaluated.
-                  </Text>
-                  <Select
-                    label="Sample trace"
-                    placeholder="Choose a sample trace"
-                    value={sample?.id || null}
-                    onChange={setSampleId}
-                    data={sampleTraces.map((item) => ({
-                      value: item.id,
-                      label: `${item.name} · ${formatTime(item.time)}`,
-                    }))}
-                  />
-                  {!sampleTraces.length && (
-                    <Text size="sm" c="dimmed">
-                      No sample traces exist on this story day.
-                    </Text>
-                  )}
-                  {sample && (
-                    <Stack gap="xs">
-                      <Text size="sm">
-                        <strong>Visitor:</strong> {sample.visitor}
-                      </Text>
-                      <Text size="sm">
-                        <strong>Assistant:</strong> {sample.reply}
-                      </Text>
-                      <Text size="xs" c="dimmed">
-                        {sample.evidence}
-                      </Text>
-                    </Stack>
-                  )}
-                  {!matchesPreset && (
-                    <Text size="sm" c="dimmed">
-                      {editing
-                        ? "No recorded sample result matches these settings. Testing custom instructions needs a connected classifier."
-                        : "Select an unchanged preset to view its recorded sample result. Custom instructions need a connected classifier."}
-                    </Text>
-                  )}
-                  <Group>
-                    <Button
-                      type="button"
-                      variant="light"
-                      disabled={!sample || !matchesPreset}
-                      onClick={test}
-                    >
-                      Test signal
-                    </Button>
-                  </Group>
-                  {testResult && sample && (
-                    <Alert
-                      title="Simulated sample result"
-                      color="teal"
-                      role="status"
-                    >
-                      {testResult.payload ? (
-                        <Stack gap="xs">
-                          {Object.entries(testResult.payload).map(
-                            ([key, value]) => (
-                              <Text key={key} size="sm">
-                                <strong>{key}:</strong> {String(value)}
-                              </Text>
-                            ),
-                          )}
-                        </Stack>
-                      ) : (
-                        "No signal event for this sample."
-                      )}
-                    </Alert>
-                  )}
-                </Stack>
-                )}
               </Accordion.Panel>
             </Accordion.Item>
-          </Accordion>
+          </Accordion>}
           {notice && (
             <Alert
               color={notice.color}

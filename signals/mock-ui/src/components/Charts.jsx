@@ -2,21 +2,11 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Anchor, Box, Paper, Text, Group, Stack, ColorSwatch, Tooltip, UnstyledButton } from '@mantine/core';
 import { AreaChart, BarChart, LineChart, Sparkline } from '@mantine/charts';
-import { formatTime } from './format';
+import { formatTime, toDate } from './format';
 
 // Small trend line for tables and cards. `data` is a list of numbers (one per day).
 export function ActivitySparkline({ data, w = 100, h = 28 }) {
   return <Sparkline w={w} h={h} data={data} curveType="monotone" color="teal" fillOpacity={0.15} />;
-}
-
-// Signal events per day. `data` comes from useStoryData().eventsPerDay().
-export function EventsOverTimeChart({ data, h = 220 }) {
-  return (
-    <Paper withBorder p="md">
-      <AreaChart h={h} data={data} dataKey="day" curveType="monotone" gridAxis="y"
-        series={[{ name: 'events', label: 'Events', color: 'teal.6' }]} />
-    </Paper>
-  );
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -25,10 +15,9 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 // Axis label for a bucket start, depending on bar size (like Laminar: "Thu 29", "12 PM", "Aug 09").
 // compact (narrow charts): fewer labels: days only for hourly bars, every 14th day for daily bars.
 function tickLabel(iso, minutes, i, compact = false) {
-  const [date, time] = iso.split('T');
-  const [y, mo, d] = date.split('-').map(Number);
-  const [hh, mm] = time.split(':').map(Number);
-  const dow = new Date(Date.UTC(y, mo - 1, d)).getUTCDay();
+  // Labels are on the local clock (buckets start on local hours and local midnight).
+  const local = toDate(iso);
+  const [mo, d, hh, mm, dow] = [local.getMonth() + 1, local.getDate(), local.getHours(), local.getMinutes(), local.getDay()];
   if (minutes >= 1440) return i % (compact ? 14 : 7) === 0 ? `${MONTHS[mo - 1]} ${String(d).padStart(2, '0')}` : '';
   if (minutes >= 360) return hh === 0 ? `${WEEKDAYS[dow]} ${d}` : '';
   if (minutes >= 60) {
