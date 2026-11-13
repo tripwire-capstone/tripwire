@@ -5,6 +5,7 @@ import TripwireList from './pages/TripwireList';
 import NewTripwire from './pages/NewTripwire';
 import TripwireDetail from './pages/TripwireDetail';
 import NotFound from './pages/NotFound';
+import Dev from './pages/Dev'; // dev view
 
 // Every route exists from the start, so page work never needs to edit this file.
 export default function App() {
@@ -15,6 +16,8 @@ export default function App() {
         <Route path="/signals" element={<TripwireList />} />
         <Route path="/signals/new" element={<NewTripwire />} />
         <Route path="/signals/:id" element={<TripwireDetail />} />
+        {/* dev view: developer-only page, no sidebar link */}
+        <Route path="/dev" element={<Dev />} />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>

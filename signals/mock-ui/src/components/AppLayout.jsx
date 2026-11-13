@@ -2,6 +2,7 @@ import { AppShell, Burger, Group, Title, NavLink as MantineNavLink } from '@mant
 import { useDisclosure } from '@mantine/hooks';
 import { NavLink, Outlet } from 'react-router-dom';
 import { homeUrl, tripwireListUrl } from './links';
+import { devUrl } from './links'; // dev view
 
 const NAV = [
   { to: homeUrl(), label: 'Home', end: true },
@@ -30,6 +31,10 @@ export default function AppLayout() {
             {({ isActive }) => <MantineNavLink component="span" label={item.label} active={isActive} />}
           </NavLink>
         ))}
+        {/* dev view: a dim link at the bottom of the sidebar, for the team. Remove with pages/Dev.jsx. */}
+        <NavLink to={devUrl()} onClick={close} style={{ textDecoration: 'none', color: 'inherit', marginTop: 'auto' }}>
+          {({ isActive }) => <MantineNavLink component="span" label="Developer" c="dimmed" active={isActive} />}
+        </NavLink>
       </AppShell.Navbar>
 
       <AppShell.Main>

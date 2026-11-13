@@ -770,3 +770,8 @@ def test_run(body: TestRunIn, conn=Depends(get_conn), judge_fn=Depends(get_judge
                              span_ids=f.span_ids) for f in result.findings],
         analysis=result.analysis, model=result.model, input_tokens=u.input_tokens,
         cached_input_tokens=u.cached_input_tokens, output_tokens=u.output_tokens, cost_usd=u.cost_usd)
+
+
+# dev view: the developer page's endpoint (dev.py). To remove it, delete this block and dev.py.
+from .dev import router as dev_router  # noqa: E402
+app.include_router(dev_router)
