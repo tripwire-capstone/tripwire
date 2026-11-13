@@ -8,6 +8,8 @@
 #   runner     PLACEHOLDER: traces -> runs + some events, every 5 s
 #   clusterer  events -> summaries -> vectors -> clusters every 10 s (needs OPENAI_API_KEY in .env;
 #              CLUSTERER_MODE=placeholder runs without OpenAI). Has a healthcheck: `docker compose ps`.
+#
+# dev view: is data flowing? Once the UI runs, open http://localhost:5174/dev.
 
 x-backend: &backend
   build: .

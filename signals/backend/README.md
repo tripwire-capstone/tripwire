@@ -42,6 +42,11 @@ docker compose exec -T db psql -U tripwire -d tripwire < check.sql
 It shows rows per table, the newest trace and last poll, how many traces wait for a run (should
 be 0 within seconds), and per signal: runs, events, clustered, in the pool.
 
+**Is it working?** With the UI running (`npm run dev` in `signals/mock-ui`), open
+http://localhost:5174/dev (or **Developer** at the bottom of the sidebar): where data is waiting,
+what's failing and why, and the latest summaries. To add a section, see the top of
+`tripwire/api/dev.py`. <!-- dev view -->
+
 **Changed a migration?** The `db` container only runs migrations on an empty database:
 `docker compose down -v && docker compose up --build` (deletes local data).
 

@@ -11,6 +11,7 @@
 export const homeUrl = () => '/';
 export const tripwireListUrl = () => '/signals';
 export const newTripwireUrl = () => '/signals/new';
+export const devUrl = () => '/dev'; // dev view
 
 // `range` (optional): a range from rangeFromParams(), so the signal page opens on the same time range.
 export function tripwireUrl(tripwireId, { tab, clusterId, eventId, range } = {}) {
