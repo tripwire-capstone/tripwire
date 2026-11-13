@@ -1,21 +1,34 @@
 // Shared date/time formatting, so every page shows times the same way.
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-// '2026-11-03T09:42:00' -> 'Nov 3, 9:42 AM'
+// Pages keep times in UTC without a zone ('2026-11-03T17:42:00'). Everything shown on screen is in the
+// browser's time zone: these helpers do the conversion, so a page never formats a time by hand.
+export const toDate = (iso) => new Date(/Z|[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`);
+
+// '2026-11-03T17:42:00' (UTC) -> 'Nov 3, 9:42 AM' in Los Angeles
 export function formatTime(iso) {
-  const [date, time] = iso.split('T');
-  const [, m, d] = date.split('-').map(Number);
-  let [hh, mm] = time.split(':').map(Number);
-  const ampm = hh >= 12 ? 'PM' : 'AM';
-  hh = hh % 12 || 12;
-  return `${MONTHS[m - 1]} ${d}, ${hh}:${String(mm).padStart(2, '0')} ${ampm}`;
+  const d = toDate(iso);
+  const hh = d.getHours();
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${hh % 12 || 12}:${String(d.getMinutes()).padStart(2, '0')} ${hh >= 12 ? 'PM' : 'AM'}`;
 }
 
-// '2026-10-21' or '2026-10-21T10:00:00' -> 'Oct 21'
+// '2026-10-21T10:00:00' (UTC) -> 'Oct 21' (the local day). A bare date '2026-10-21' is shown as is.
 export function formatDay(iso) {
-  const [, m, d] = iso.slice(0, 10).split('-').map(Number);
-  return `${MONTHS[m - 1]} ${d}`;
+  if (iso.length === 10) {
+    const [, m, d] = iso.split('-').map(Number);
+    return `${MONTHS[m - 1]} ${d}`;
+  }
+  const d = toDate(iso);
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
 }
+
+// The browser's time zone: its IANA name for the API ('America/Los_Angeles'), and its short name for
+// the screen ('PST', or 'PDT' in summer: pass the time it's for).
+export const browserZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
+export const zoneLabel = (iso) =>
+  new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' })
+    .formatToParts(iso ? toDate(iso) : new Date())
+    .find((part) => part.type === 'timeZoneName')?.value ?? '';
 
 // plural(1, 'event') -> '1 event'; plural(3, 'event') -> '3 events'
 export function plural(n, word) {

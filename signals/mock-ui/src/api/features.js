@@ -1,8 +1,6 @@
 // Controls hidden until the API supports them. HIDDEN_CONTROLS.md says why each one is hidden and
 // what has to exist before it comes back. Turning one on: set it to true and delete its row there.
 export const FEATURES = {
-  clusterCounts: false, // Clusters column, cluster strip and colors, cluster filter
-  activityColumn: false, // Activity sparkline on the Signals list
   deleteSignals: false, // Row checkboxes and Delete on the Signals list
   appVersions: false, // App version markers, filter and column
   templates: false, // Template tiles on the New signal form
@@ -14,4 +12,5 @@ export const FEATURES = {
   backfill: false, // Backfill button, Settings → Backfill
   versionsTab: false, // Settings → Versions
   alertsTab: false, // Settings → Alerts
+  notifications: false, // Notifications page, its sidebar link and the bell
 };

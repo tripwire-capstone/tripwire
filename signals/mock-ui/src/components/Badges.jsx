@@ -15,6 +15,3 @@ export function StatusBadge({ status }) {
   return <Badge color={status === 'active' ? 'teal' : 'gray'} variant="light">{status}</Badge>;
 }
 
-export function NotificationTypeBadge({ type }) {
-  return <Badge size="xs" variant="light" color={type === 'critical-event' ? 'red' : 'teal'}>{NOTIFICATION_LABEL[type]}</Badge>;
-}

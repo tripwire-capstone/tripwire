@@ -2,6 +2,10 @@
 
 *Copy of the "Tripwire Mock UI Spec" doc, Nov 4, 2026. The doc is the source of truth; refresh this file when the doc changes. Rules for AIs are in AGENTS.md.*
 
+> **Nov 12, 2026:** every page now reads the real Tripwire API, and the fake data, story day picker,
+> Notifications page and `/style` page are gone. The "Fake data", "Story day" and "Where things are" sections
+> below describe the Nov 5 mock and are kept for history. How the pages use the API: `SIGNALS_API.md`.
+
 A clickable React mock of Tripwire's agreed core features, running on fake data, for the demo on Nov 5, 2026. Not connected to Laminar or our services. 
 
 ## Terms

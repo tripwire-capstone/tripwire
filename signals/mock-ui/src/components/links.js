@@ -1,4 +1,3 @@
-import { LAMINAR_PROJECT_URL } from '../mock/data';
 
 // Links between screens. Use these instead of writing URLs by hand, so every page links the same way.
 //
@@ -12,7 +11,6 @@ import { LAMINAR_PROJECT_URL } from '../mock/data';
 export const homeUrl = () => '/';
 export const tripwireListUrl = () => '/signals';
 export const newTripwireUrl = () => '/signals/new';
-export const notificationsUrl = () => '/notifications';
 
 // `range` (optional): a range from rangeFromParams(), so the signal page opens on the same time range.
 export function tripwireUrl(tripwireId, { tab, clusterId, eventId, range } = {}) {
@@ -26,8 +24,4 @@ export function tripwireUrl(tripwireId, { tab, clusterId, eventId, range } = {})
   return `/signals/${tripwireId}${query ? `?${query}` : ''}`;
 }
 
-// Where a notification leads: the tripwire, with its cluster selected and its event highlighted.
-export const notificationUrl = (n) => tripwireUrl(n.tripwireId, { clusterId: n.clusterId, eventId: n.eventId });
 
-// A trace in Laminar (opens Laminar's trace view).
-export const laminarTraceUrl = (traceId) => `${LAMINAR_PROJECT_URL}/traces/${traceId}`;

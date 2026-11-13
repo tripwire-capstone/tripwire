@@ -3,7 +3,10 @@
 Creates, once (running it again changes nothing):
   * one project, pointing at the Laminar from .env
   * one signal, "User frustration", with its version 1
-  * one cluster for that signal, which the placeholder clusterer links events to
+
+No clusters: the real clusterer makes them from events. (The seed used to add a fake
+"Placeholder cluster"; it showed in the UI and real assign could pick it. Placeholder clusterer
+mode now leaves every event in the pool unless a test adds a cluster itself.)
 
 Settings (env or .env): DATABASE_URL, LMNR_PROJECT_API_KEY (only its last 4 characters
 are stored, as the hint), LMNR_API_URL (default Laminar Cloud), LMNR_UI_URL,
@@ -22,7 +25,6 @@ import psycopg
 from dotenv import load_dotenv
 
 from .judge.config import configured_judge_model
-from .placeholder import FIXED_EMBEDDING, vector_text
 
 log = logging.getLogger("seed")
 
@@ -58,11 +60,6 @@ def seed(conn, *, api_url, ui_url, key_hint, laminar_project_id=None):
                VALUES (%s, 1, %s, %s, %s)""",
             (signal_id, INSTRUCTION, json.dumps(OUTPUT_SCHEMA), model),
         )
-        cur.execute(
-            """INSERT INTO clusters (signal_id, name, description, centroid)
-               VALUES (%s, 'Placeholder cluster', 'Seeded for the skeleton', %s)""",
-            (signal_id, vector_text(FIXED_EMBEDDING)),
-        )
     return True
 
 
@@ -76,7 +73,7 @@ def main():
                     ui_url=os.environ.get("LMNR_UI_URL", "https://laminar.sh"),
                     key_hint=key[-4:] if key else "none",
                     laminar_project_id=os.environ.get("LMNR_PROJECT_ID"))
-    log.info("seeded project, signal and cluster" if done else "already seeded; nothing to do")
+    log.info("seeded project and signal" if done else "already seeded; nothing to do")
 
 
 if __name__ == "__main__":

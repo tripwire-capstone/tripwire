@@ -40,11 +40,11 @@ def count(conn, table):
 
 # ------------------------------------------------------------------ seed
 
-def test_seed_creates_project_signal_version_and_cluster_once(conn, monkeypatch):
+def test_seed_creates_project_signal_and_version_once_and_no_cluster(conn, monkeypatch):
     assert seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh", key_hint="abcd")
     monkeypatch.delenv("JUDGE_DEFAULT_MODEL")
     assert not seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh", key_hint="abcd")
-    assert [count(conn, t) for t in ("signals", "signal_versions", "clusters")] == [1, 1, 1]
+    assert [count(conn, t) for t in ("signals", "signal_versions", "clusters")] == [1, 1, 0]
     assert conn.execute("SELECT model FROM signal_versions").fetchone()[0] == "gpt-6-luna"
     key, hint = conn.execute("SELECT laminar_api_key_encrypted, laminar_api_key_hint FROM projects "
                              "WHERE name = 'default'").fetchone()
@@ -105,8 +105,16 @@ def test_runs_of_an_inactive_signal_stay_pending(conn):
 
 # ------------------------------------------------------------------ clusterer
 
+def add_cluster(conn):
+    """The seed makes no cluster; placeholder-mode tests add one for the signal."""
+    from tripwire.placeholder import FIXED_EMBEDDING, vector_text
+    conn.execute("""INSERT INTO clusters (signal_id, name, centroid)
+                    SELECT id, 'Test cluster', %s FROM signals""", (vector_text(FIXED_EMBEDDING),))
+
+
 def test_clusterer_embeds_every_event_and_links_the_picked_ones(conn):
     add_traces(conn, seeded(conn), 30)
+    add_cluster(conn)
     run_step(conn, 1.0)                                    # 30 events
     events = [r[0] for r in conn.execute("SELECT id FROM signal_events").fetchall()]
     expected = sum(picked(f"cluster:{e}", 0.5) for e in events)
@@ -125,6 +133,7 @@ def test_clusterer_embeds_every_event_and_links_the_picked_ones(conn):
 
 def test_clusterer_second_step_does_nothing(conn):
     add_traces(conn, seeded(conn), 5)
+    add_cluster(conn)
     run_step(conn, 1.0)
     cluster_step(conn, 0.5)
     assert cluster_step(conn, 0.5) == (0, 0)
@@ -132,6 +141,5 @@ def test_clusterer_second_step_does_nothing(conn):
 
 def test_signal_without_a_cluster_leaves_every_event_in_the_pool(conn):
     add_traces(conn, seeded(conn), 5)
-    run_step(conn, 1.0)
-    conn.execute("DELETE FROM clusters")
+    run_step(conn, 1.0)                                    # the seed makes no cluster
     assert cluster_step(conn, 1.0) == (5, 0)

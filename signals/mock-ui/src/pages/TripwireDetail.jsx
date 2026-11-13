@@ -1,10 +1,13 @@
 import { useState } from 'react';
+import { useDebouncedValue } from '@mantine/hooks';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   Alert, Anchor, Badge, Box, Breadcrumbs, Button, Checkbox, CloseButton, Drawer, Group, Kbd, Menu, Pagination, Paper,
   SegmentedControl, Stack, Table, Text, TextInput, Title, Tooltip, UnstyledButton,
 } from '@mantine/core';
-import { FEATURES, editSignal, setActive, testRun, useEvents, useRuns, useSignal } from '../api';
+import {
+  FEATURES, editSignal, setActive, testRun, useClusters, useEventCounts, useEvents, useRunCounts, useRuns, useSignal,
+} from '../api';
 import { SeverityBadge, KindBadge, StatusBadge } from '../components/Badges';
 import { TimeBarChart } from '../components/Charts';
 import TimeRangePicker from '../components/TimeRangePicker';
@@ -13,15 +16,18 @@ import TripwireForm from '../components/TripwireForm';
 import { formatTime, formatRelative, formatCost, shortId, plural } from '../components/format';
 import { tripwireListUrl } from '../components/links';
 import { rangeFromParams, bucketMinutesFor, makeBuckets, bucketIndex, shortLabel } from '../components/timeRange';
-import { cssColor, UNCLUSTERED_COLOR, RUN_COLORS } from '../theme';
+import { clusterColor, cssColor, UNCLUSTERED_COLOR, RUN_COLORS, CLUSTER_COLORS } from '../theme';
 
 // A signal's page, modeled on Laminar's Signal page: Events, Runs and Settings tabs with a time range.
 // Address: /signals/<id>?tab=&event=&pastHours=&pageNumber=&severity=...
-// Reads the real API. Clusters and app versions are hidden until they have endpoints (src/api/features.js).
+// Reads the real API. Counts, charts, filters, search and paging all happen in the database, so every
+// number covers the whole time range, not just the rows loaded. App versions stay hidden (src/api/features.js).
 
 const PAGE_SIZE = 25;
 const DEFAULT_HOURS = 72; // a signal's page opens on the past 3 days
 const SEVERITIES = ['critical', 'warning', 'info'];
+const SEARCH_PAUSE_MS = 300; // search runs after a short pause in typing, not on every keystroke
+const OTHER_CLUSTERS_COLOR = 'gray.6';
 
 // "Now" in the pages' time format (UTC, no zone). Read once, and again when Refresh is clicked.
 const currentTime = () => new Date().toISOString().slice(0, 19);
@@ -114,31 +120,51 @@ function LoadError({ error }) {
 
 // ---------------------------------------------------------------- Events tab
 
+// Colors by rank: the top clusters (most events in the range) get their own color, the rest share
+// "Other clusters", events in no cluster are gray. The strip and the chart use the same function.
+function clusterColors(clusters) {
+  const top = new Map(clusters.slice(0, CLUSTER_COLORS.length).map((c, i) => [c.id, clusterColor(i)]));
+  return (clusterId) => (clusterId == null ? UNCLUSTERED_COLOR : top.get(clusterId) ?? OTHER_CLUSTERS_COLOR);
+}
+
 function EventsTab({ tripwire, params, update, now, onRefresh }) {
   const range = rangeFromParams(params, now, DEFAULT_HOURS);
-  const { data, error, loading } = useEvents(tripwire.id, range);
-  const inRange = data ?? [];
-
-  // Events shown: in range, matching filters and search.
   const severity = params.get('severity');
+  const clusterId = params.get('cluster') ? Number(params.get('cluster')) : null;
   const [search, setSearch] = useState('');
-  const shown = inRange.filter((e) => {
-    if (severity && e.severity !== severity) return false;
-    if (search) {
-      const hay = [e.severity, e.traceId, e.id, ...e.evidenceLabels, ...Object.values(e.payload)].join(' ').toLowerCase();
-      if (!hay.includes(search.toLowerCase())) return false;
-    }
-    return true;
-  });
+  const [q] = useDebouncedValue(search.trim(), SEARCH_PAUSE_MS);
+  const page = Math.max(0, Number(params.get('pageNumber')) || 0);
 
-  // Chart: one series until clusters have an endpoint; then one series per cluster (FEATURES.clusterCounts).
+  const clustersQuery = useClusters(tripwire.id, range);
+  const clusterData = clustersQuery.data ?? { events: 0, clusteredEvents: 0, clusters: [] };
+  const colorOf = clusterColors(clusterData.clusters);
+
+  // Table: one page from the database, with every filter applied there.
+  const { data, error, loading } = useEvents(tripwire.id, range, {
+    severity, cluster: clusterId, q, offset: page * PAGE_SIZE, limit: PAGE_SIZE,
+  });
+  const total = data?.total ?? 0;
+  const pageRows = data?.events ?? [];
+
+  // Chart: events per bucket and cluster, same severity and search filters. A selected cluster shows alone.
   const minutes = bucketMinutesFor(range.hours);
   const buckets = makeBuckets(range.start, range.end, minutes);
-  const series = [{ name: 'events', label: 'Events', color: UNCLUSTERED_COLOR }];
-  const rows = buckets.map((b) => ({ bucket: b.start, events: 0 }));
-  for (const e of inRange) {
-    const i = bucketIndex(buckets, e.time);
-    if (i >= 0) rows[i].events += 1;
+  const counts = useEventCounts(tripwire.id, range, minutes, { severity, q });
+  const keyOf = (id) => {
+    if (id == null) return 'none';
+    return clusterData.clusters.slice(0, CLUSTER_COLORS.length).some((c) => c.id === id) ? `c${id}` : 'other';
+  };
+  const named = clusterData.clusters.slice(0, CLUSTER_COLORS.length)
+    .map((c) => ({ name: `c${c.id}`, label: c.name, color: colorOf(c.id) }));
+  const series = clusterId != null
+    ? [{ name: 'selected', label: clusterData.clusters.find((c) => c.id === clusterId)?.name ?? 'Cluster', color: colorOf(clusterId) }]
+    : [...named, { name: 'other', label: 'Other clusters', color: OTHER_CLUSTERS_COLOR },
+      { name: 'none', label: 'Not in a cluster', color: UNCLUSTERED_COLOR }];
+  const rows = buckets.map((b) => Object.fromEntries([['bucket', b.start], ...series.map((x) => [x.name, 0])]));
+  for (const c of counts.data ?? []) {
+    const i = bucketIndex(buckets, c.bucket);
+    if (i < 0) continue;
+    if (clusterId != null) { if (c.clusterId === clusterId) rows[i].selected += c.count; } else rows[i][keyOf(c.clusterId)] += c.count;
   }
 
   // Table columns: time, severity, the signal's own fields, trace, id.
@@ -149,17 +175,31 @@ function EventsTab({ tripwire, params, update, now, onRefresh }) {
   ];
   const [hidden, setHidden] = useState([]);
   const columns = allColumns.filter((c) => !hidden.includes(c.key));
-  const page = Math.max(0, Number(params.get('pageNumber')) || 0);
-  const pageRows = shown.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const openEventId = params.get('event');
-  const openEvent = inRange.find((e) => String(e.id) === openEventId) ?? null;
+  const openEvent = pageRows.find((e) => String(e.id) === openEventId) ?? null;
 
-  const filterGroups = [{ key: 'severity', label: 'Severity', options: SEVERITIES }];
+  const filterGroups = [
+    { key: 'severity', label: 'Severity', options: SEVERITIES },
+    // Shown whenever a cluster is selected, even one with no events in this range, so a filter is never invisible.
+    ...(clusterData.clusters.length || clusterId != null ? [{
+      key: 'cluster', label: 'Cluster',
+      options: clusterData.clusters.map((c) => c.name), values: clusterData.clusters.map((c) => String(c.id)),
+    }] : []),
+  ];
+  const filtered = Boolean(severity || clusterId != null || q);
 
   return (
     <Stack gap="sm">
-      {FEATURES.clusterCounts && <ClusterStrip clusters={[]} onSelect={(c) => update({ cluster: c.id, event: null })} />}
-      <LoadError error={error} />
+      <Stack gap={4}>
+        <ClusterStrip clusters={clusterData.clusters} colorOf={colorOf} selectedId={clusterId}
+          onSelect={(c) => update({ cluster: c.id === clusterId ? null : String(c.id), event: null })} />
+        {clusterData.events > 0 && (
+          <Text size="xs" c="dimmed">
+            {clusterData.clusteredEvents.toLocaleString()} of {plural(clusterData.events, 'event')} in this range {clusterData.clusteredEvents === 1 ? 'is' : 'are'} in a cluster
+          </Text>
+        )}
+      </Stack>
+      <LoadError error={error ?? counts.error ?? clustersQuery.error} />
 
       <Paper withBorder p="md">
         <TimeBarChart data={rows} series={series} minutes={minutes} markers={[]} h={190} />
@@ -167,7 +207,8 @@ function EventsTab({ tripwire, params, update, now, onRefresh }) {
 
       <Toolbar filterGroups={filterGroups} params={params} update={update} columns={allColumns} hidden={hidden}
         setHidden={setHidden} onRefresh={onRefresh} />
-      <SearchBox value={search} onChange={setSearch} placeholder="Search events by fields, severity, trace id, evidence…" />
+      <SearchBox value={search} onChange={(v) => { setSearch(v); if (page) update({ pageNumber: null }); }}
+        placeholder="Search events by field values, severity, trace id, evidence…" />
 
       <Table.ScrollContainer minWidth={900}>
         <Table highlightOnHover verticalSpacing="sm">
@@ -178,8 +219,8 @@ function EventsTab({ tripwire, params, update, now, onRefresh }) {
             {pageRows.length === 0 && (
               <Table.Tr><Table.Td colSpan={columns.length}>
                 <Text ta="center" c="dimmed" py="md">
-                  {loading ? 'Loading…'
-                    : inRange.length === 0 ? `No events in the last ${range.absolute ? 'selected range' : shortLabel(range.hours)}`
+                  {loading && !data ? 'Loading…'
+                    : !filtered ? `No events in the last ${range.absolute ? 'selected range' : shortLabel(range.hours)}`
                       : 'No events match these filters'}
                 </Text>
               </Table.Td></Table.Tr>
@@ -193,7 +234,7 @@ function EventsTab({ tripwire, params, update, now, onRefresh }) {
           </Table.Tbody>
         </Table>
       </Table.ScrollContainer>
-      <Paging total={shown.length} page={page} update={update} />
+      <Paging total={total} page={page} update={update} />
 
       <EventDrawer tripwire={tripwire} event={openEvent} now={now} update={update} />
     </Stack>
@@ -217,9 +258,10 @@ function eventCell(column, e, now) {
   }
 }
 
-// Colored bars, one per cluster, sized by event count (Laminar's cluster strip). Shown when
-// FEATURES.clusterCounts is on and the clusters endpoint fills `clusters`.
-function ClusterStrip({ clusters, selectedId, onSelect }) {
+// Colored bars, one per cluster with events in the range, sized by its share of the clustered events
+// (Laminar's cluster strip). Events in no cluster aren't in the strip; the caption below it counts them.
+// Clicking a cluster filters the chart and table to it; clicking it again clears the filter.
+function ClusterStrip({ clusters, colorOf, selectedId, onSelect }) {
   if (clusters.length === 0) {
     return <Text size="sm" c="dimmed">No clusters in this time range.</Text>;
   }
@@ -227,10 +269,10 @@ function ClusterStrip({ clusters, selectedId, onSelect }) {
     <Group gap={6} wrap="nowrap" style={{ overflow: 'hidden' }}>
       {clusters.map((c) => (
         <Tooltip key={c.id} label={`${c.name} · ${plural(c.count, 'event')}`} withArrow>
-          <UnstyledButton onClick={() => onSelect(c)}
+          <UnstyledButton onClick={() => onSelect(c)} aria-pressed={selectedId === c.id}
             style={{
               flex: `${c.count} 1 0`, minWidth: 48, padding: '3px 10px', borderRadius: 'var(--mantine-radius-xl)',
-              background: cssColor(c.color), opacity: selectedId && clusters.some((x) => x.id === selectedId) && selectedId !== c.id ? 0.45 : 1,
+              background: cssColor(colorOf(c.id)), opacity: selectedId != null && selectedId !== c.id ? 0.45 : 1,
               outline: selectedId === c.id ? '2px solid var(--mantine-color-gray-3)' : 'none',
             }}>
             <Text size="sm" c="white" truncate="end">{c.name}</Text>
@@ -247,64 +289,52 @@ const RUN_STATUSES = ['completed', 'failed', 'pending', 'running'];
 
 function RunsTab({ tripwire, params, update, now, onRefresh }) {
   const range = rangeFromParams(params, now, DEFAULT_HOURS);
-  const { data, error, loading } = useRuns(tripwire.id, range);
-  const inRange = data ?? [];
   const [search, setSearch] = useState('');
-  const status = params.get('status');
-  const source = params.get('source');
-  const outcome = params.get('outcome');
-  // Unfinished runs (pending, running) aren't in the chart yet.
-  const outcomeOf = (r) => (r.status === 'failed' ? 'failed' : r.status !== 'completed' ? null : r.events ? 'event' : 'noEvent');
+  const [q] = useDebouncedValue(search.trim(), SEARCH_PAUSE_MS);
+  const filters = { status: params.get('status'), source: params.get('source'), outcome: params.get('outcome'), q };
+  const page = Math.max(0, Number(params.get('pageNumber')) || 0);
+  const { data, error, loading } = useRuns(tripwire.id, range, { ...filters, offset: page * PAGE_SIZE, limit: PAGE_SIZE });
+  const total = data?.total ?? 0;
+  const pageRows = data?.runs ?? [];
 
-  const shown = inRange.filter((r) => {
-    if (status && r.status !== status) return false;
-    if (source && r.source !== source) return false;
-    if (outcome && (outcome === 'event') !== r.events > 0) return false;
-    if (search) {
-      const hay = [r.status, r.source, r.id, r.traceId, r.error ?? ''].join(' ').toLowerCase();
-      if (!hay.includes(search.toLowerCase())) return false;
-    }
-    return true;
-  });
-
+  // Chart: finished runs per bucket by outcome, same filters (pending and running runs aren't in it).
   const minutes = bucketMinutesFor(range.hours);
   const buckets = makeBuckets(range.start, range.end, minutes);
+  const counts = useRunCounts(tripwire.id, range, minutes, filters);
   const series = [
     { name: 'event', label: 'Event', color: RUN_COLORS.event },
     { name: 'noEvent', label: 'No event', color: RUN_COLORS.noEvent },
     { name: 'failed', label: 'Failed', color: RUN_COLORS.failed },
   ];
   const rows = buckets.map((b) => ({ bucket: b.start, event: 0, noEvent: 0, failed: 0 }));
-  for (const r of shown) {
-    const i = bucketIndex(buckets, r.time);
-    const o = outcomeOf(r);
-    if (i >= 0 && o) rows[i][o] += 1;
+  for (const c of counts.data ?? []) {
+    const i = bucketIndex(buckets, c.bucket);
+    if (i >= 0) for (const k of ['event', 'noEvent', 'failed']) rows[i][k] += c[k];
   }
 
   const allColumns = [
     { key: 'status', label: 'Status' }, { key: 'source', label: 'Source' }, { key: 'event', label: 'Events' },
-    ...(FEATURES.clusterCounts ? [{ key: 'clusters', label: 'Clusters' }] : []),
     { key: 'cost', label: 'Cost' }, { key: 'time', label: 'Updated at' }, { key: 'runId', label: 'Run ID' },
   ];
   const [hidden, setHidden] = useState([]);
   const columns = allColumns.filter((c) => !hidden.includes(c.key));
-  const page = Math.max(0, Number(params.get('pageNumber')) || 0);
-  const pageRows = shown.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const filterGroups = [
     { key: 'status', label: 'Status', options: RUN_STATUSES },
     { key: 'source', label: 'Source', options: ['trigger', 'backfill'] },
     { key: 'outcome', label: 'Event', options: ['event', 'no event'], values: ['event', 'none'] },
   ];
+  const filtered = Boolean(filters.status || filters.source || filters.outcome || q);
 
   return (
     <Stack gap="sm">
-      <LoadError error={error} />
+      <LoadError error={error ?? counts.error} />
       <Toolbar filterGroups={filterGroups} params={params} update={update} columns={allColumns} hidden={hidden}
         setHidden={setHidden} onRefresh={onRefresh} />
-      <SearchBox value={search} onChange={setSearch} placeholder="Filter by status, run id, trace id, error…" />
+      <SearchBox value={search} onChange={(v) => { setSearch(v); if (page) update({ pageNumber: null }); }}
+        placeholder="Search by status, run id, trace id, error…" />
       <Paper withBorder p="md">
         <TimeBarChart data={rows} series={series} minutes={minutes} markers={[]} h={170} />
-        <Text size="sm" c="dimmed" mt="xs">Total: {shown.length}</Text>
+        <Text size="sm" c="dimmed" mt="xs">Total: {total.toLocaleString()}</Text>
       </Paper>
 
       <Table.ScrollContainer minWidth={900}>
@@ -316,7 +346,7 @@ function RunsTab({ tripwire, params, update, now, onRefresh }) {
             {pageRows.length === 0 && (
               <Table.Tr><Table.Td colSpan={columns.length}>
                 <Text ta="center" c="dimmed" py="md">
-                  {loading ? 'Loading…' : inRange.length === 0 ? 'No runs in this time range' : 'No runs match these filters'}
+                  {loading && !data ? 'Loading…' : !filtered ? 'No runs in this time range' : 'No runs match these filters'}
                 </Text>
               </Table.Td></Table.Tr>
             )}
@@ -324,7 +354,7 @@ function RunsTab({ tripwire, params, update, now, onRefresh }) {
           </Table.Tbody>
         </Table>
       </Table.ScrollContainer>
-      <Paging total={shown.length} page={page} update={update} />
+      <Paging total={total} page={page} update={update} />
     </Stack>
   );
 }
@@ -341,7 +371,6 @@ function runCell(column, r) {
       : r.laminarUrl
         ? <Anchor size="sm" c="dimmed" href={r.laminarUrl} target="_blank" rel="noreferrer">No event ↗</Anchor>
         : <Text size="sm" c="dimmed">No event</Text>;
-    case 'clusters': return <Text size="sm" c="dimmed">-</Text>;
     case 'cost': return <Text size="sm" ff="monospace">{r.cost == null ? '—' : formatCost(r.cost)}</Text>;
     case 'time': return <Text size="sm" style={{ whiteSpace: 'nowrap' }}>{formatTime(r.time)}</Text>;
     case 'runId': return <Text size="sm" ff="monospace" c="dimmed">{r.id}</Text>;
@@ -417,7 +446,7 @@ function Toolbar({ filterGroups, params, update, columns, hidden, setHidden, onR
       <Button variant="default" size="xs" onClick={onRefresh}>↻ Refresh</Button>
       {active.map((g) => {
         const value = params.get(g.key);
-        const label = g.values ? g.options[g.values.indexOf(value)] : value;
+        const label = (g.values ? g.options[g.values.indexOf(value)] : value) ?? value;
         return (
           <Badge key={g.key} variant="light" color="gray" size="lg" tt="none"
             rightSection={<CloseButton size="xs" aria-label={`Remove ${g.label} filter`} onClick={() => update({ [g.key]: null })} />}>

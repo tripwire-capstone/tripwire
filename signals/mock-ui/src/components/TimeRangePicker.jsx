@@ -3,19 +3,17 @@ import { useSearchParams } from 'react-router-dom';
 import { Popover, UnstyledButton, Group, Badge, Text, TextInput, Stack, Button, Divider } from '@mantine/core';
 import { DatePicker } from '@mantine/dates';
 import dayjs from 'dayjs';
-import { useStoryData } from './StoryClock';
-import { PRESETS, rangeFromParams, withRange, parseDuration, addHours } from './timeRange';
-import { formatTime } from './format';
+import { PRESETS, rangeFromParams, withRange, parseDuration } from './timeRange';
+import { formatTime, toDate, zoneLabel } from './format';
 
 // Time range control, like Laminar's: a chip ("7d") plus the dates, opening a menu with
 // a typed duration ("4 hours, 8 days"), presets, and an absolute date range.
 // It reads and writes the page address (?pastHours= or ?startDate=&endDate=).
 // defaultHours: the range shown when the address has none (must match the page's own rangeFromParams call).
-// now: pages on real data pass the real clock; mock pages leave it out and use the story clock.
+// now: the page's "now" (UTC, no zone), read once and again on Refresh; defaults to the real clock.
 export default function TimeRangePicker({ defaultHours, now }) {
   const [params, setParams] = useSearchParams();
-  const story = useStoryData();
-  const asOf = now ?? story.asOf;
+  const asOf = now ?? new Date().toISOString().slice(0, 19);
   const range = rangeFromParams(params, asOf, defaultHours);
   const [opened, setOpened] = useState(false);
   const [view, setView] = useState('menu'); // 'menu' | 'calendar'
@@ -34,8 +32,9 @@ export default function TimeRangePicker({ defaultHours, now }) {
     const [from, to] = dates;
     setParams(withRange(params, {
       absolute: true,
-      start: dayjs(from).startOf('day').format('YYYY-MM-DDTHH:mm:ss'),
-      end: dayjs(to ?? from).endOf('day').format('YYYY-MM-DDTHH:mm:ss'),
+      // The picked days are local days; the address keeps UTC, like every other time in the pages.
+      start: dayjs(from).startOf('day').toDate().toISOString().slice(0, 19),
+      end: dayjs(to ?? from).endOf('day').toDate().toISOString().slice(0, 19),
     }));
     close();
   };
@@ -47,7 +46,7 @@ export default function TimeRangePicker({ defaultHours, now }) {
           style={{ border: '1px solid var(--mantine-color-dark-4)', borderRadius: 'var(--mantine-radius-md)', padding: '4px 10px' }}>
           <Group gap="xs" wrap="nowrap">
             <Badge variant="filled" color="dark.4" radius="sm">{range.label}</Badge>
-            <Text size="sm" c="dimmed" style={{ whiteSpace: 'nowrap' }}>{formatTime(range.start)} – {formatTime(range.end)}</Text>
+            <Text size="sm" c="dimmed" style={{ whiteSpace: 'nowrap' }}>{formatTime(range.start)} – {formatTime(range.end)} {zoneLabel(range.end)}</Text>
           </Group>
         </UnstyledButton>
       </Popover.Target>
@@ -69,7 +68,7 @@ export default function TimeRangePicker({ defaultHours, now }) {
           </Stack>
         ) : (
           <Stack gap="xs" align="center">
-            <DatePicker type="range" value={dates} onChange={setDates} maxDate={new Date(`${addHours(asOf, 0)}`)} />
+            <DatePicker type="range" value={dates} onChange={setDates} maxDate={toDate(asOf)} />
             <Group justify="space-between" w="100%">
               <Button size="xs" variant="subtle" color="gray" onClick={() => setView('menu')}>Back</Button>
               <Button size="xs" disabled={!dates[0]} onClick={applyDates}>Apply</Button>

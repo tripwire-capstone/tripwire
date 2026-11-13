@@ -1,9 +1,10 @@
 // Turns API responses into the shapes the pages were built on, and form values into API bodies.
 // When the API changes, this is the one file to update.
 
-// API times ("2026-11-11T22:30:43.992398Z") -> the pages' format: UTC without a zone
-// ("2026-11-11T22:30:43"), which formatTime, rangeFromParams and the charts expect.
-const pageTime = (iso) => (iso ? iso.slice(0, 19) : null);
+// API times -> the pages' format: UTC without a zone ("2026-11-11T22:30:43"), which formatTime,
+// rangeFromParams and the charts expect. Converts any offset to UTC first: the API sends times in
+// the database's time zone, which is UTC in Docker but not on every machine ("15:00:00-08:00").
+const pageTime = (iso) => (iso ? new Date(iso).toISOString().slice(0, 19) : null);
 
 const kindOf = (template) => (template ? "preset" : "custom");
 const statusOf = (active) => (active ? "active" : "paused");
@@ -21,8 +22,8 @@ export function summaryFromApi(s) {
     problemEvents: s.problem_events,
     runs: s.runs,
     lastEventAt: pageTime(s.last_event_at),
-    clusters: null, // no clusters endpoint yet (FEATURES.clusterCounts)
-    activity: [], // no per-day counts yet (FEATURES.activityColumn)
+    clusters: s.clusters, // clusters with events in the range
+    activity: s.activity, // events per slice of the range, oldest first (24 slices)
   };
 }
 
@@ -128,3 +129,69 @@ export function definitionToApi(values) {
 
 export const templateToApi = (templateId) =>
   templateId && templateId !== "blank" ? templateId : null;
+
+// The run statuses and sources the pages use -> the API's words, for filters.
+const RUN_STATUS_TO_API = { completed: "done", failed: "failed", pending: "pending", running: "running" };
+const SOURCE_TO_API = { trigger: "live", backfill: "backfill" };
+
+export const eventPageFromApi = (page, signalId) => ({
+  total: page.total,
+  events: page.events.map((e) => eventFromApi(e, signalId)),
+});
+
+export const runPageFromApi = (page, signalId) => ({
+  total: page.total,
+  runs: page.runs.map((r) => runFromApi(r, signalId)),
+});
+
+// The Runs tab's filters (page words) -> API parameters.
+export const runFiltersToApi = ({ status, source, outcome, ...rest }) => ({
+  ...rest,
+  status: status ? RUN_STATUS_TO_API[status] ?? status : null,
+  source: source ? SOURCE_TO_API[source] ?? source : null,
+  outcome: outcome || null,
+});
+
+// [{ bucket, cluster_id, events }] -> [{ bucket (page time), clusterId, count }]
+export const eventCountsFromApi = (rows) =>
+  rows.map((r) => ({ bucket: pageTime(r.bucket), clusterId: r.cluster_id, count: r.events }));
+
+// [{ bucket, event, nothing, failed }] -> the chart's names: event, noEvent, failed
+export const runCountsFromApi = (rows) =>
+  rows.map((r) => ({ bucket: pageTime(r.bucket), event: r.event, noEvent: r.nothing, failed: r.failed }));
+
+export const clustersFromApi = (body) => ({
+  events: body.events,
+  clusteredEvents: body.clustered_events,
+  clusters: body.clusters.map((c) => ({
+    id: c.id,
+    name: c.name ?? `Cluster ${c.id}`, // named moments after it forms
+    count: c.events,
+    problemCount: c.problem_events,
+    firstEventAt: pageTime(c.first_event_at),
+    lastEventAt: pageTime(c.last_event_at),
+  })),
+});
+
+export const overviewFromApi = (body) => ({
+  signals: body.signals.map((s) => ({
+    id: s.id,
+    name: s.name,
+    problemEvents: s.problem_events,
+    cost: s.cost_usd,
+    unpricedRuns: s.unpriced_runs,
+  })),
+  problemClusters: body.problem_clusters.map((c) => ({
+    id: c.id,
+    name: c.name ?? `Cluster ${c.id}`,
+    signalId: c.signal_id,
+    signalName: c.signal_name,
+    problemEvents: c.problem_events,
+  })),
+  problemCounts: body.problem_counts.map((r) => ({
+    bucket: pageTime(r.bucket),
+    signalId: r.signal_id,
+    count: r.problem_events,
+  })),
+  runCounts: runCountsFromApi(body.run_counts),
+});

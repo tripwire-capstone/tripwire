@@ -74,19 +74,42 @@ export function bucketMinutesFor(hours) {
   return 2880;
 }
 
-// Split [start, end] into buckets: [{ start, end }], each `minutes` long, aligned to the clock.
+// Split [start, end] into buckets: [{ start, end }] in the pages' format (UTC, no zone), each `minutes`
+// long on the LOCAL clock: hour bars start on the local hour, day bars at local midnight, so a bar
+// labeled "Thu 12" is the browser's Thursday. Steps are wall-clock steps, so a daylight-saving day is
+// one 23- or 25-hour bar. The API groups its counts the same way (it gets the zone as `tz`):
+// sub-day sizes divide the day from local midnight; multi-day sizes count days from 2000-01-01.
 export function makeBuckets(start, end, minutes) {
-  const size = minutes * 60_000;
-  const first = Math.floor(fromIso(start).getTime() / size) * size;
+  const s = fromIso(start);
   const last = fromIso(end).getTime();
+  let t;
+  if (minutes >= 1440) {
+    const days = minutes / 1440;
+    const dayNumber = Math.round((Date.UTC(s.getFullYear(), s.getMonth(), s.getDate()) - Date.UTC(2000, 0, 1)) / 86_400_000);
+    t = new Date(2000, 0, 1 + dayNumber - (((dayNumber % days) + days) % days));
+  } else {
+    const sinceMidnight = s.getHours() * 60 + s.getMinutes();
+    t = new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0, Math.floor(sinceMidnight / minutes) * minutes);
+  }
   const out = [];
-  for (let t = first; t <= last; t += size) out.push({ start: toIso(new Date(t)), end: toIso(new Date(t + size)) });
+  while (t.getTime() <= last) {
+    const next = new Date(t.getFullYear(), t.getMonth(), t.getDate(), t.getHours(), t.getMinutes() + minutes);
+    out.push({ start: toIso(t), end: toIso(next) });
+    t = next;
+  }
   return out;
 }
 
-// Which bucket an ISO time falls in (index), or -1.
+// Which bucket an ISO time falls in (index), or -1. Buckets can differ in length (daylight saving),
+// so this searches instead of dividing.
 export function bucketIndex(buckets, iso) {
-  if (!buckets.length || iso < buckets[0].start || iso >= buckets[buckets.length - 1].end) return -1;
-  const size = fromIso(buckets[0].end) - fromIso(buckets[0].start);
-  return Math.floor((fromIso(iso) - fromIso(buckets[0].start)) / size);
+  let lo = 0;
+  let hi = buckets.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (iso < buckets[mid].start) hi = mid - 1;
+    else if (iso >= buckets[mid].end) lo = mid + 1;
+    else return mid;
+  }
+  return -1;
 }
