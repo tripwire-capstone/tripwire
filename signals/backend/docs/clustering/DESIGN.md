@@ -152,6 +152,27 @@ Code: `tripwire/clusterer/summarize.py`, `llm_client.py`, `prompts/`. Full reaso
   call = one paid request); OpenAI errors become `LLMServiceError` / `LLMBadOutput` / `LLMInputTooLong` /
   `LLMRefused`; anything else (wrong key, bad request) raises as-is. Prompt caching left at OpenAI's default.
 
+### Prompt v2 / v3 and details (SIG-64, Nov 16; experiment, v1 still the default)
+
+- **Why:** v1 summaries lead with the user's activity and keep product names, so tau clusters split by item
+  ("exchange a laptop" vs "a water bottle") and park clusters group by what the visitor was doing.
+- **Both versions:** the summary leads with what the Signal looks for, as this finding shows it, not with
+  the surrounding activity (no wording for any one kind of Signal: the Signal's own instruction decides);
+  the product area moves to the end; new output field **`details`**: up to 6 `kind: value` strings
+  (`park: Glacier Bay`, `tool: book_campsite`), no IDs unique to one conversation.
+- **The one difference:** v2 keeps names of places, products and people out of the summary (they go in
+  `details`); v3 keeps a name in the summary when the finding is about that specific one (Laminar's leaves
+  look like this). Everything else is identical, so a grouping difference comes from that choice alone.
+- **`event_summaries.details`** (migration 007, jsonb array or NULL): stored, **not embedded**; naming
+  will read it. NULL = a prompt without details (v1). Details never fail an event: blanks and case
+  duplicates dropped, at most 8 kept, a wrong shape becomes `[]`, each with a logged warning.
+- **Comparing versions:** `python -m tripwire.clusterer.try_prompts --database-url URL` samples finished
+  events (2 per cluster, 3 unclustered per signal), asks each version (v1 re-run included: the noise
+  baseline) and writes a side-by-side `report.md`. Read-only. Then the winner is checked with the real
+  clusterer on a copy of the database.
+- **Decision rule (agreed before looking):** v2 by default if close; v3 only if it keeps names
+  consistently and that separates causes v2 merges; if both disappoint, detail counting (backlog) comes back.
+
 ## Prepare step (PR 3 + 4, decided Nov 11)
 
 Code: `tripwire/clusterer/prepare.py`, `embed.py`. Full reasoning: Design Notes Q21.

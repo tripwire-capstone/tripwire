@@ -9,9 +9,11 @@ import pytest
 from tests.clustering_data import add_signal, add_version
 from tripwire.clusterer.llm_client import FakeLLM, LLMResult, price
 from tripwire.clusterer.summarize import (
+    MAX_DETAILS,
     EventInput,
     Row,
     build_messages,
+    clean_details,
     decide,
     field_descriptions,
     load_event,
@@ -110,6 +112,71 @@ def test_prompt_v1_loads_with_a_strict_cause_then_summary_schema():
     assert list(prompt.schema["properties"]) == ["cause", "summary"]
     assert prompt.schema["required"] == ["cause", "summary"]
     assert prompt.schema["additionalProperties"] is False
+
+
+@pytest.mark.parametrize("version", [2, 3])
+def test_prompts_v2_and_v3_add_a_required_details_list(version):
+    prompt = load_prompt(version)
+    assert "grouped by similarity" in prompt.system and "details" in prompt.system
+    assert list(prompt.schema["properties"]) == ["cause", "summary", "details"]
+    assert prompt.schema["required"] == ["cause", "summary", "details"]
+    assert prompt.schema["properties"]["details"] == {"type": "array", "items": {"type": "string"}}
+    assert prompt.schema["additionalProperties"] is False
+
+
+def test_v3_differs_from_v2_only_in_whether_the_summary_keeps_names():
+    v2, v3 = load_prompt(2).system, load_prompt(3).system
+    assert "Leave out names of places, products and people" in v2
+    assert "Keep the\n  name of a place, product or tool only when" in v3
+    assert "Leave out names of places" not in v3
+
+
+# ------------------------------------------------------------------ details (SIG-64)
+
+def test_v1_answer_has_no_details_key_so_details_stay_none():
+    assert clean_details(GOOD) == (None, None)
+    assert decide(ok(), None, NOW).details is None
+
+
+def test_details_are_trimmed_and_blanks_and_case_duplicates_dropped_first_spelling_kept():
+    raw = {"details": ["  park: Glacier Bay ", "", "   ", "PARK: glacier bay", "tool: book_campsite"]}
+    assert clean_details(raw) == (["park: Glacier Bay", "tool: book_campsite"], None)
+
+
+def test_an_empty_details_list_is_kept_as_empty_not_none():
+    assert clean_details({"details": []}) == ([], None)
+
+
+def test_non_string_items_are_dropped_without_failing():
+    assert clean_details({"details": ["store: airport", 7, None, {"x": 1}]}) == (["store: airport"], None)
+
+
+def test_details_that_arent_a_list_become_empty_with_a_warning_and_the_event_is_still_done():
+    details, warning = clean_details({"details": "park: Glacier Bay"})
+    assert details == [] and "not a list" in warning
+    update = decide(ok(GOOD | {"details": "park: Glacier Bay"}), None, NOW)
+    assert update.status == "done" and update.details == [] and "not a list" in update.warning
+
+
+def test_more_than_the_limit_keeps_the_first_ones_with_a_warning():
+    many = [f"item: {n}" for n in range(MAX_DETAILS + 3)]
+    details, warning = clean_details({"details": many})
+    assert details == many[:MAX_DETAILS] and f"kept the first {MAX_DETAILS}" in warning
+
+
+def test_exactly_the_limit_is_kept_without_a_warning():
+    exact = [f"item: {n}" for n in range(MAX_DETAILS)]
+    assert clean_details({"details": exact}) == (exact, None)
+
+
+def test_a_long_summary_and_too_many_details_report_both_warnings():
+    output = GOOD | {"summary": "x" * 400, "details": [f"item: {n}" for n in range(MAX_DETAILS + 1)]}
+    warning = decide(ok(output), None, NOW).warning
+    assert "400 characters" in warning and "kept the first" in warning
+
+
+def test_errors_never_carry_details():
+    assert decide(LLMBadOutput("broken"), None, NOW).details is None
 
 
 # ------------------------------------------------------------------ decide (Q20)
@@ -283,3 +350,34 @@ def test_summarize_event_lets_our_own_bugs_through_and_leaves_the_row_alone(conn
     with pytest.raises(KeyError):
         summarize_event(conn, Broken(), event_id, "gpt-6-luna", load_prompt(1), NOW)
     assert conn.execute("SELECT count(*) FROM event_summaries").fetchone()[0] == 0
+
+
+def test_details_are_saved_as_a_json_list(conn):
+    _, _, event_id = make_event(conn)
+    save(conn, event_id, decide(ok(GOOD | {"details": ["park: Glacier Bay"]}), None, NOW),
+         "gpt-6-luna", 2, NOW)
+    assert conn.execute("SELECT details FROM event_summaries").fetchone()[0] == ["park: Glacier Bay"]
+
+
+def test_a_v1_answer_saves_null_details(conn):
+    _, _, event_id = make_event(conn)
+    save(conn, event_id, decide(ok(), None, NOW), "gpt-6-luna", 1, NOW)
+    assert conn.execute("SELECT details FROM event_summaries").fetchone()[0] is None
+
+
+def test_the_database_rejects_details_that_arent_an_array(conn):
+    import psycopg
+    _, _, event_id = make_event(conn)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute("""INSERT INTO event_summaries (event_id, model, prompt_version, details)
+                        VALUES (%s, 'm', 2, '{"park": "Glacier Bay"}'::jsonb)""", (event_id,))
+
+
+def test_summarize_event_with_prompt_v2_saves_details_end_to_end(conn):
+    _, _, event_id = make_event(conn)
+    llm = FakeLLM([GOOD | {"details": ["park: Glacier Bay", "tool: book_campsite"]}])
+    update = summarize_event(conn, llm, event_id, "gpt-6-luna", load_prompt(2), NOW)
+    assert update.status == "done"
+    assert conn.execute("SELECT prompt_version, details FROM event_summaries").fetchone() == (
+        2, ["park: Glacier Bay", "tool: book_campsite"])
+    assert llm.requests[0]["json_schema"]["required"] == ["cause", "summary", "details"]
