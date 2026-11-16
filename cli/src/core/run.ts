@@ -46,7 +46,7 @@ export async function runWithExitCode(
   args: string[],
   options: RunOptions = {},
 ): Promise<{ stdout: string; exitCode: number }> {
-  const { cwd, logStdout = true, okExitCodes = [], onLine } = options;
+  const { cwd, logStdout = true, okExitCodes = [], onLine, input } = options;
   log.write(`\n$ ${file} ${args.join(" ")}\n${cwd ? `  (in ${cwd})\n` : ""}`);
 
   const toLog = { file: log.path, append: true };
@@ -67,6 +67,7 @@ export async function runWithExitCode(
   const result = await execa(file, args, {
     cwd,
     reject: false,
+    ...(input === undefined ? {} : { input }),
     env: { TF_IN_AUTOMATION: "1", ...(file === "terraform" ? terraformEnv() : {}) },
     stdout,
     stderr: ["pipe", toLog],

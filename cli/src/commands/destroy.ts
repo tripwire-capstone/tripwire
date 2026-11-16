@@ -54,9 +54,10 @@ export async function destroy(options: DestroyOptions): Promise<void> {
 
   p.log.warn(
     [
-      `This deletes the stack: ${count} resources, including Laminar,`,
+      `This deletes the stack: ${count} resources, including Laminar, Tripwire,`,
       "the database, the data box and the load balancer.",
-      "Kept: the DNS zone, the certificate and the state bucket.",
+      "Kept: the DNS zone, the certificate, the state bucket, and Tripwire's",
+      "OpenAI and Laminar keys in SSM (reused on the next deploy).",
       "",
       "Final snapshots of the database and data volume are taken first.",
       `Once they're ready, ${oldFinals} old final and ${scheduled} scheduled`,

@@ -4,7 +4,7 @@ import { bucketExists } from "../terraform/bootstrap.js";
 import { checkLogin } from "../aws/checks.js";
 import { readConfig, writeConfig } from "../core/config.js";
 import { publicNameServers, sameNameServers } from "../aws/dns.js";
-import { startupRows, trackStartup, waitForLaminar } from "../aws/ecs.js";
+import { LAMINAR, TRIPWIRE, startupRows, trackStartup, waitForServices } from "../aws/ecs.js";
 import { UserError } from "../core/errors.js";
 import { syncInfra } from "../terraform/infra.js";
 import { bundledInfraDir, deploymentDir } from "../core/paths.js";
@@ -26,14 +26,16 @@ import {
 } from "../terraform/terraform.js";
 import { stateBucketName } from "../terraform/tfvars.js";
 import { answer, downloadingNote, step } from "../ui/ui.js";
+import { ensureLaminarKey, ensureOpenAiKey, migrateTripwire } from "./tripwire.js";
 import { CLI_VERSION } from "../core/version.js";
 import type { DataPlan, DeployOptions, StepLabels } from "../types/commands.js";
 import type { TripwireConfig } from "../types/config.js";
-import type { ServiceProgress } from "../types/ecs.js";
+import type { ServiceProgress, ServiceSet } from "../types/ecs.js";
 import type { Block } from "../types/progress.js";
 import type { Plan, StackName } from "../types/terraform.js";
 
-const LITE_PRICE = "about $135/mo in us-east-1, plus usage";
+// Laminar about $135, Tripwire's four services about $37 (Fargate, us-east-1)
+const LITE_PRICE = "about $172/mo in us-east-1, plus usage and OpenAI calls";
 
 function showModes(): void {
   console.log("Choose a mode:\n");
@@ -107,18 +109,23 @@ async function applyStack(
   spin.stop(labels.title);
 }
 
-// "Starting Laminar", with a live line per service
-async function startLaminar(log: Log, region: string): Promise<void> {
+// "Starting Laminar" / "Starting Tripwire", with a live line per service
+async function startServices(log: Log, region: string, set: ServiceSet): Promise<void> {
   const startedAt = Date.now();
   let tracked: Record<string, ServiceProgress> = {};
   let status: Block["status"] = "running";
   const display = showProgress(() => {
     const now = Date.now();
-    return { title: "Starting Laminar", status, seconds: (now - startedAt) / 1000, rows: startupRows(tracked, startedAt, now) };
+    return {
+      title: `Starting ${set.product}`,
+      status,
+      seconds: (now - startedAt) / 1000,
+      rows: startupRows(tracked, startedAt, now, set),
+    };
   });
   try {
-    await waitForLaminar(log, region, (update) => {
-      tracked = trackStartup(tracked, update, Date.now());
+    await waitForServices(log, region, set, (update) => {
+      tracked = trackStartup(tracked, update, Date.now(), set.services);
     });
     status = "done";
   } catch (err) {
@@ -259,12 +266,15 @@ export async function deploy(options: DeployOptions): Promise<void> {
   }
 
   const yes = options.yes ?? false;
+  let current = await ensureOpenAiKey(log, config, yes);
+  await writeConfig(current);
+
   await applyStack(log, "bootstrap", yes, {
     title: "Preparing your AWS account",
     unchanged: null,
     live: { action: "build", stack: "bootstrap", estimate: "usually about a minute", usualSeconds: 5 * 60 },
   });
-  await deployPersistent(log, config, yes);
+  await deployPersistent(log, current, yes);
   await applyStack(log, "stack", yes, {
     title: data.stackEmpty ? "Building Laminar" : "Updating Laminar",
     unchanged: "Laminar · unchanged",
@@ -275,18 +285,39 @@ export async function deploy(options: DeployOptions): Promise<void> {
       usualSeconds: 15 * 60,
     },
   });
-  await startLaminar(log, config.region);
+  await startServices(log, config.region, LAMINAR);
 
-  const outputs = await tfOutputs(log, "stack");
+  // Tripwire: needs Laminar up (for its key), then its database, then its services
+  let outputs = await tfOutputs(log, "stack");
+  current = await ensureLaminarKey(log, current, String(outputs.laminar_url), yes);
+  await writeConfig(current);
+  await migrateTripwire(log, current, outputs);
+
+  const image = String(outputs.tripwire_image);
+  if (current.tripwire?.servicesImage !== image) {
+    const firstTime = !current.tripwire?.servicesImage;
+    current = { ...current, tripwire: { ...current.tripwire, servicesImage: image } };
+    await writeSettings(current, data.restore);
+    await applyStack(log, "stack", yes, {
+      title: firstTime ? "Building Tripwire" : "Updating Tripwire",
+      unchanged: null,
+      live: { action: "build", stack: "stack", usualSeconds: 5 * 60 },
+    });
+    await writeConfig(current);
+    outputs = await tfOutputs(log, "stack");
+  }
+  await startServices(log, config.region, TRIPWIRE);
+
   await writeConfig({
-    ...config,
+    ...current,
     lastDeploy: { mode: "lite", cliVersion: CLI_VERSION, at: new Date().toISOString() },
   });
 
   p.note(
     [
-      `Laminar  ${outputs.laminar_url}`,
-      `Log      ${log.path}`,
+      `Tripwire  ${outputs.tripwire_url}`,
+      `Laminar   ${outputs.laminar_url}`,
+      `Log       ${log.path}`,
     ].join("\n"),
     "Deployed",
   );
