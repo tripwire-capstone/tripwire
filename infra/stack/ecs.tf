@@ -111,6 +111,21 @@ data "aws_iam_policy_document" "ecs_execution_secrets" {
     actions   = ["ssm:GetParameters"]
     resources = distinct(values(local.frontend_secrets))
   }
+
+  # Tripwire's tasks (tripwire.tf): its own database URL, and the master URL + password for the
+  # migration task. The OpenAI and Laminar keys are written by the CLI, so they're named by ARN.
+  statement {
+    sid     = "ReadTripwireSecrets"
+    actions = ["ssm:GetParameters"]
+    resources = concat(
+      [
+        aws_ssm_parameter.tripwire_database_url.arn,
+        aws_ssm_parameter.tripwire_db_password.arn,
+        aws_ssm_parameter.database_url.arn,
+      ],
+      values(local.tripwire_cli_secret_arn),
+    )
+  }
 }
 
 resource "aws_iam_role_policy" "ecs_execution_secrets" {
