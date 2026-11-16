@@ -22,3 +22,11 @@ export interface MigrationOutcome {
 
 // fetch, or a fake of it in tests
 export type FetchFn = typeof fetch;
+
+// Where "Starting Tripwire" is: the database step first, then the services; times are Date.now() values
+export interface TripwireStart {
+  stage: "database" | "services";
+  startedAt: number;
+  databaseDoneAt?: number;
+  databaseFailed?: boolean;
+}

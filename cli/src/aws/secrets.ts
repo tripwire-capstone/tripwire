@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DEPLOYMENT_NAME } from "../core/paths.js";
 import { run, type Log } from "../core/run.js";
 import type { SecretKey } from "../types/tripwire.js";
@@ -18,17 +21,26 @@ export const secretExists = async (log: Log, region: string, key: SecretKey): Pr
   return out.trim() !== "0";
 };
 
-// The request put-parameter reads from stdin, so the value never appears as an argument (arguments
+// The request put-parameter reads from a file, so the value never appears as an argument (arguments
 // are logged and visible to other programs on the machine)
 export const putParameterInput = (key: SecretKey, value: string): string =>
   JSON.stringify({ Name: secretName(key), Value: value, Type: "SecureString", Overwrite: true });
 
-// Stores the key encrypted (SecureString, AWS's default SSM key), replacing any earlier value
+// Stores the key encrypted (SecureString, AWS's default SSM key), replacing any earlier value.
+// The request goes through a file only this user can read (the AWS CLI can't read file:///dev/stdin
+// from a pipe on macOS), deleted as soon as the command ends, even when it fails.
 export const putSecret = async (log: Log, region: string, key: SecretKey, value: string): Promise<void> => {
-  await run(
-    log,
-    "aws",
-    ["ssm", "put-parameter", "--region", region, "--cli-input-json", "file:///dev/stdin", "--query", "Version", "--output", "text"],
-    { input: putParameterInput(key, value), logStdout: false },
-  );
+  const dir = await mkdtemp(join(tmpdir(), "tripwire-secret-"));
+  const requestFile = join(dir, "request.json");
+  try {
+    await writeFile(requestFile, putParameterInput(key, value), { mode: 0o600 });
+    await run(
+      log,
+      "aws",
+      ["ssm", "put-parameter", "--region", region, "--cli-input-json", `file://${requestFile}`, "--query", "Version", "--output", "text"],
+      { logStdout: false },
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 };

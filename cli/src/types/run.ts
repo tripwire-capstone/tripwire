@@ -7,6 +7,4 @@ export interface RunOptions {
   // Called with each stdout line as it arrives; what it returns is logged (and returned) instead
   // of the line, undefined drops it
   onLine?: (line: string) => string | undefined;
-  // Sent to the program's stdin; never logged (for secrets, which must not be arguments)
-  input?: string;
 }

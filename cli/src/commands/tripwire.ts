@@ -2,7 +2,6 @@
 // Order (deploy.ts): OpenAI key → stacks → Laminar up → Laminar key → migration → services.
 import * as p from "@clack/prompts";
 import { checkLaminarKey, checkOpenAiKey, projectIdFrom } from "../aws/keys.js";
-import { migrationTarget, runMigration } from "../aws/migrate.js";
 import { keyHint, putSecret, secretExists } from "../aws/secrets.js";
 import { UserError } from "../core/errors.js";
 import type { Log } from "../core/run.js";
@@ -70,7 +69,8 @@ export const ensureLaminarKey = async (
   if (await secretExists(log, config.region, "laminar_api_key")) return config;
   p.note(
     [
-      `1. Open ${laminarUrl} and sign in (first time: the temporary password AWS emailed you).`,
+      `1. Open ${laminarUrl} and sign in. First time: use the temporary password AWS emailed`,
+      `   to ${config.laminarUsers.join(", ") || "the address you gave tripwire init"}.`,
       "2. Create a project, or open the one your app sends traces to.",
       "3. In the project's settings, create a project API key.",
       "",
@@ -102,18 +102,6 @@ export const ensureLaminarKey = async (
   return withTripwire(config, { laminarProjectId: projectId, laminarKeyHint: keyHint(value) });
 };
 
-// The one-off migration task: creates or updates Tripwire's database before the services change
-export const migrateTripwire = async (
-  log: Log,
-  config: TripwireConfig,
-  outputs: Record<string, unknown>,
-): Promise<void> => {
-  const environment: Record<string, string> = config.tripwire?.laminarProjectId
-    ? { LMNR_PROJECT_ID: config.tripwire.laminarProjectId }
-    : {};
-  await step(
-    "Preparing Tripwire's database",
-    () => runMigration(log, config.region, migrationTarget(outputs), environment),
-    () => "Tripwire's database is ready",
-  );
-};
+// Settings the migration task gets for this run only (not secrets: they're arguments)
+export const migrationEnvironment = (config: TripwireConfig): Record<string, string> =>
+  config.tripwire?.laminarProjectId ? { LMNR_PROJECT_ID: config.tripwire.laminarProjectId } : {};
