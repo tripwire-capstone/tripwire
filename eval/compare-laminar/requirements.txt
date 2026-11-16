@@ -1,0 +1,5 @@
+# Pinned to match signals/backend/requirements.txt where this tool shares a dependency.
+httpx==0.28.1
+psycopg[binary]==3.3.8
+python-dotenv==1.2.3
+pytest==9.1.1

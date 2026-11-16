@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Launcher for compare.py: same pattern as traffic/tau-bench/tau-traffic, but a plain venv
+# (pip, not uv) to match signals/backend's convention.
+#
+#   ./compare-laminar --traffic park --n 50 --label glacier-fix-attempt-1
+#   ./compare-laminar --help
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$HERE"
+
+if [[ ! -d .venv ]]; then
+  echo "No .venv here yet. Run:" >&2
+  echo "  python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
+  exit 1
+fi
+
+exec .venv/bin/python compare.py "$@"
