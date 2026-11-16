@@ -1,0 +1,9 @@
+# Build context for backend/Dockerfile is signals/ (so the image can include the built UI).
+# Keep secrets, local environments and build output out of it.
+**/node_modules
+**/__pycache__
+mock-ui/dist
+backend/.venv
+backend/.env
+backend/.pytest_cache
+backend/tests
