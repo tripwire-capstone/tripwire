@@ -9,7 +9,10 @@ The pieces, in call order (one pass of step 4):
 
   find_work       two reads: unnamed clusters (to name) and named clusters with their sizes;
                   renames_due (pure) picks which named ones have grown enough to rename
-  ... (load_input, pick_sample, build_messages, llm.complete, clean_name, save: next pieces)
+  load_input      three reads for one cluster: its Signal, its members (closest to the center
+                  first) and the names its sibling clusters already have
+  pick_sample     pure: which members the LLM sees (8 closest + 3 farthest, summarized only)
+  ... (build_messages, llm.complete, clean_name, save: next pieces)
 
 No LLM call happens inside a database transaction: every read ends before the call, and each
 write is its own short transaction that checks nothing changed meanwhile.
@@ -106,3 +109,83 @@ def find_work(conn, growth, max_renames):
                    current_source=cluster.source, named_at=cluster.named_at)
                for cluster in renames_due(named, growth, max_renames)]
     return new + renames
+
+
+# ------------------------------------------------------------------ load_input, pick_sample
+
+CLOSEST_MEMBERS = 8   # the cluster's core: what most of it is about
+FARTHEST_MEMBERS = 3  # its edges: so the name covers the whole cluster, not just the core
+
+
+@dataclass(frozen=True)
+class Member:
+    event_id: int
+    summary: str | None               # None = no finished summary (placeholder mode, test data)
+    details: tuple                    # "kind: value" strings; () for v1 summaries or none found
+
+
+@dataclass(frozen=True)
+class ClusterInput:
+    """Everything the prompt for one cluster is built from."""
+    job: Job
+    signal_name: str
+    instruction: str                  # from the Signal's latest version
+    member_count: int                 # every member, summarized or not
+    members: tuple                    # every member, closest to the center first
+    sibling_names: tuple              # names of the Signal's other clusters, oldest cluster first
+
+
+# The Signal as it is now: its latest version's instruction, even if some members were judged
+# under an older one (decided Nov 16: the latest is what the Signal means today).
+SIGNAL_SQL = """
+SELECT signal.name, version.instruction
+FROM signals signal
+JOIN signal_versions version ON version.signal_id = signal.id
+WHERE signal.id = %s
+ORDER BY version.version_number DESC
+LIMIT 1
+"""
+
+# Every member, closest to the cluster's CURRENT center first (cluster_members.distance is the
+# distance when the event joined; the center has moved since). Ties go to the lower event ID.
+MEMBERS_SQL = """
+SELECT member.event_id, summary.summary, summary.details
+FROM clusters cluster
+JOIN cluster_members member ON member.cluster_id = cluster.id
+JOIN event_embeddings embedded ON embedded.event_id = member.event_id
+LEFT JOIN event_summaries summary ON summary.event_id = member.event_id AND summary.status = 'done'
+WHERE cluster.id = %s
+ORDER BY embedded.embedding <=> cluster.centroid, member.event_id
+"""
+
+SIBLING_NAMES_SQL = f"""
+SELECT sibling.name
+FROM clusters sibling
+WHERE sibling.signal_id = %s AND sibling.id <> %s AND sibling.name IS NOT NULL
+  AND {leaf_cluster("sibling")}
+ORDER BY sibling.id
+"""
+
+
+def load_input(conn, job):
+    """The prompt's inputs for one job, or None if the cluster has no members any more (every
+    trace deleted since find_work): nothing to name, so the job is skipped."""
+    rows = conn.execute(MEMBERS_SQL, (job.cluster_id,)).fetchall()
+    if not rows:
+        return None
+    members = tuple(Member(event_id, summary, tuple(details or ()))
+                    for event_id, summary, details in rows)
+    signal_name, instruction = conn.execute(SIGNAL_SQL, (job.signal_id,)).fetchone()
+    siblings = conn.execute(SIBLING_NAMES_SQL, (job.signal_id, job.cluster_id)).fetchall()
+    return ClusterInput(job, signal_name, instruction, member_count=len(members), members=members,
+                        sibling_names=tuple(name for (name,) in siblings))
+
+
+def pick_sample(members):
+    """(closest, farthest): the summarized members the LLM sees, each list closest-first.
+    `members` must already be closest-first (load_input's order). A cluster of 11 or fewer
+    summarized members is shown whole; its last few simply land in `farthest`."""
+    summarized = [member for member in members if member.summary is not None]
+    closest = summarized[:CLOSEST_MEMBERS]
+    farthest = summarized[CLOSEST_MEMBERS:][-FARTHEST_MEMBERS:]
+    return closest, farthest

@@ -2,13 +2,23 @@
 
 import pytest
 
-from tests.clustering_data import add_cluster, add_event, add_member, add_signal, add_summary
+from tests.clustering_data import (
+    add_cluster,
+    add_event,
+    add_member,
+    add_signal,
+    add_summary,
+    add_version,
+)
 from tests.vectors import base_vector, vector_at
 from tripwire.clusterer.llm_naming import (
     NAMED_CLUSTERS_SQL,
     Job,
+    Member,
     NamedCluster,
     find_work,
+    load_input,
+    pick_sample,
     rename_is_due,
     renames_due,
 )
@@ -161,3 +171,115 @@ def test_parent_clusters_and_clusters_without_a_center_are_never_work(conn):
     assert find_work(conn, growth=2.0, max_renames=10) == []
     conn.execute("UPDATE clusters SET name = 'Old name'")
     assert find_work(conn, growth=2.0, max_renames=10) == []
+
+
+# ------------------------------------------------------------------ pick_sample (pure)
+
+def members(count, unsummarized=()):
+    """`count` members, closest-first, event IDs 1..count; IDs in `unsummarized` have no summary."""
+    return [Member(i, None if i in unsummarized else f"summary {i}", ()) for i in range(1, count + 1)]
+
+
+def ids(sample):
+    closest, farthest = sample
+    return [m.event_id for m in closest], [m.event_id for m in farthest]
+
+
+def test_a_small_cluster_is_shown_whole_as_closest():
+    assert ids(pick_sample(members(3))) == ([1, 2, 3], [])
+
+
+def test_eleven_members_are_shown_whole_none_twice():
+    assert ids(pick_sample(members(11))) == ([1, 2, 3, 4, 5, 6, 7, 8], [9, 10, 11])
+
+
+def test_a_big_cluster_shows_its_8_closest_and_3_farthest():
+    assert ids(pick_sample(members(20))) == ([1, 2, 3, 4, 5, 6, 7, 8], [18, 19, 20])
+
+
+def test_members_without_a_summary_are_left_out_even_the_closest():
+    assert ids(pick_sample(members(12, unsummarized={1, 12}))) == (
+        [2, 3, 4, 5, 6, 7, 8, 9], [10, 11])
+
+
+def test_no_summarized_members_gives_an_empty_sample():
+    assert ids(pick_sample(members(3, unsummarized={1, 2, 3}))) == ([], [])
+
+
+# ------------------------------------------------------------------ load_input (database)
+
+def new_job(cluster_id, signal_id):
+    return Job(cluster_id, signal_id, "new", fallback="unused")
+
+
+def test_members_come_closest_to_the_current_center_first(conn):
+    signal_id, version_id = add_signal(conn)
+    cluster_id = add_cluster(conn, signal_id, base_vector())
+    far = member(conn, version_id, cluster_id, distance=0.3, axis=1)
+    near = member(conn, version_id, cluster_id, distance=0.05, axis=2)
+    middle = member(conn, version_id, cluster_id, distance=0.15, axis=3)
+    conn.execute("UPDATE cluster_members SET distance = 0.9 WHERE event_id = %s", (near,))  # stale
+    loaded = load_input(conn, new_job(cluster_id, signal_id))
+    assert [m.event_id for m in loaded.members] == [near, middle, far]
+
+
+def test_members_at_the_same_distance_come_in_event_id_order(conn):
+    signal_id, version_id = add_signal(conn)
+    cluster_id = add_cluster(conn, signal_id, base_vector())
+    first = member(conn, version_id, cluster_id, distance=0.1, axis=1)
+    second = member(conn, version_id, cluster_id, distance=0.1, axis=2)
+    loaded = load_input(conn, new_job(cluster_id, signal_id))
+    assert [m.event_id for m in loaded.members] == [first, second]
+
+
+def test_member_count_includes_members_without_a_summary(conn):
+    signal_id, version_id = add_signal(conn)
+    cluster_id = add_cluster(conn, signal_id, base_vector())
+    member(conn, version_id, cluster_id, axis=1)
+    unsummarized = member(conn, version_id, cluster_id, axis=2, summary=None)
+    loaded = load_input(conn, new_job(cluster_id, signal_id))
+    assert loaded.member_count == 2
+    assert [m.summary for m in loaded.members if m.event_id == unsummarized] == [None]
+
+
+def test_details_are_passed_through_and_missing_details_are_empty(conn):
+    signal_id, version_id = add_signal(conn)
+    cluster_id = add_cluster(conn, signal_id, base_vector())
+    with_details = member(conn, version_id, cluster_id, distance=0.05, axis=1)
+    member(conn, version_id, cluster_id, distance=0.2, axis=2)       # a v1 summary: details NULL
+    conn.execute("""UPDATE event_summaries SET details = '["park: Glacier Bay", "tool: book_campsite"]'
+                    WHERE event_id = %s""", (with_details,))
+    loaded = load_input(conn, new_job(cluster_id, signal_id))
+    assert [m.details for m in loaded.members] == [("park: Glacier Bay", "tool: book_campsite"), ()]
+
+
+def test_the_instruction_comes_from_the_signals_latest_version(conn):
+    signal_id, version_1 = add_signal(conn, name="Booking problems")
+    cluster_id = add_cluster(conn, signal_id, base_vector())
+    member(conn, version_1, cluster_id)                               # judged under version 1
+    version_2 = add_version(conn, signal_id, 2)
+    conn.execute("UPDATE signal_versions SET instruction = 'Flag failed bookings.' WHERE id = %s",
+                 (version_2,))
+    loaded = load_input(conn, new_job(cluster_id, signal_id))
+    assert (loaded.signal_name, loaded.instruction) == ("Booking problems", "Flag failed bookings.")
+
+
+def test_sibling_names_are_the_signals_other_named_leaf_clusters(conn):
+    signal_id, version_id = add_signal(conn)
+    other_signal, _ = add_signal(conn, name="Signal B")
+    cluster_id = add_cluster(conn, signal_id, base_vector())
+    member(conn, version_id, cluster_id)
+    for name, sig, level in [("Older Sibling", signal_id, 0), (None, signal_id, 0),
+                             ("Other Signal's", other_signal, 0), ("A Parent", signal_id, 1),
+                             ("Newer Sibling", signal_id, 0)]:
+        sibling = add_cluster(conn, sig, base_vector(), level=level)
+        conn.execute("UPDATE clusters SET name = %s WHERE id = %s", (name, sibling))
+    conn.execute("UPDATE clusters SET name = 'Its Own Name' WHERE id = %s", (cluster_id,))
+    loaded = load_input(conn, new_job(cluster_id, signal_id))
+    assert loaded.sibling_names == ("Older Sibling", "Newer Sibling")
+
+
+def test_a_cluster_whose_members_are_all_gone_gives_none(conn):
+    signal_id, _ = add_signal(conn)
+    cluster_id = add_cluster(conn, signal_id, base_vector())
+    assert load_input(conn, new_job(cluster_id, signal_id)) is None
