@@ -25,6 +25,8 @@ Delivery (slack_notification_attempts, one row per alert):
     given up as failed. Slack refusing the message (revoked webhook, archived channel) fails at once.
   * A notifier that dies mid-send leaves the claim to expire; the alert is then tried again, so it
     can (rarely) arrive twice. Dropping a critical alert is worse than a duplicate.
+  * Catch-up note: after alerts failed for good, the next alert that gets through is followed by one
+    note saying how many were missed (each failed alert is counted in one note, marked caught_up_at).
 
 Settings (env): DATABASE_URL, TRIPWIRE_SECRET_KEY, TRIPWIRE_UI_URL (links; default
 http://localhost:5174), TRIPWIRE_SLACK_POLL_INTERVAL_SECONDS (default 15).
@@ -304,7 +306,48 @@ def record_result(conn, kind, record_id, tries: int, result: SlackResult) -> Non
                   kind, record_id, tries, "try" if tries == 1 else "tries", result.error)
 
 
-def deliver(conn, kind, record_id, text, *, project_id, encrypted_webhook, environ=os.environ) -> None:
+# Failed alerts since connecting that no catch-up note has counted yet, marked as counted now.
+CATCH_UP_SQL = """
+UPDATE slack_notification_attempts AS a
+SET caught_up_at = now()
+FROM projects AS p
+WHERE p.id = %(project_id)s AND a.project_id = p.id
+  AND a.status = 'failed' AND a.caught_up_at IS NULL AND a.attempted_at >= p.slack_enabled_at
+RETURNING a.notification_type, a.record_id
+"""
+
+UNDO_CATCH_UP_SQL = """
+UPDATE slack_notification_attempts SET caught_up_at = NULL
+WHERE (notification_type, record_id) IN (SELECT * FROM unnest(%(kinds)s::text[], %(ids)s::bigint[]))
+"""
+
+
+def catch_up_message(missed: list, ui_url: str) -> str:
+    critical = sum(1 for kind, _ in missed if kind == "critical_run")
+    clusters = len(missed) - critical
+    parts = ([_plural(critical, "critical alert")] if critical else []) + \
+            ([_plural(clusters, "new-cluster alert")] if clusters else [])
+    verb = "it" if len(missed) == 1 else "they"
+    return (f":inbox_tray: *Catching up:* {' and '.join(parts)} couldn't be sent to this channel earlier, "
+            f"so {verb} never arrived. <{ui_url}/|Open Tripwire> to see what was found.")
+
+
+def catch_up(conn, project_id: int, webhook_url: str, ui_url: str) -> None:
+    """After a send that worked: one note about alerts that failed for good since connecting."""
+    missed = conn.execute(CATCH_UP_SQL, {"project_id": project_id}).fetchall()
+    if not missed:
+        return
+    result = post_slack(catch_up_message(missed, ui_url), webhook_url=webhook_url)
+    if result.ok:
+        log.info("Sent a Slack catch-up note for %s missed alerts", len(missed))
+    else:  # count them in the next note instead
+        conn.execute(UNDO_CATCH_UP_SQL, {"kinds": [kind for kind, _ in missed],
+                                         "ids": [record_id for _, record_id in missed]})
+        log.warning("Slack catch-up note failed (%s); trying again after the next alert", result.error)
+
+
+def deliver(conn, kind, record_id, text, *, project_id, encrypted_webhook, environ=os.environ,
+            ui_url: str = DEFAULT_UI_URL) -> None:
     """Claim, send and record one alert. Use an autocommit connection so the claim is saved first."""
     tries = claim(conn, kind, record_id, project_id=project_id, encrypted_webhook=encrypted_webhook)
     if tries is None:
@@ -318,6 +361,7 @@ def deliver(conn, kind, record_id, text, *, project_id, encrypted_webhook, envir
     record_result(conn, kind, record_id, tries, result)
     if result.ok:
         mark_slack_verified(conn, project_id, encrypted_webhook)
+        catch_up(conn, project_id, webhook_url, ui_url)
 
 
 def poll_once(conn, stop, ui_url: str = DEFAULT_UI_URL, environ=os.environ,
@@ -339,14 +383,14 @@ def poll_once(conn, stop, ui_url: str = DEFAULT_UI_URL, environ=os.environ,
             continue
         deliver(conn, "critical_run", row["run_id"], critical_message(row, ui_url),
                 project_id=row["project_id"], encrypted_webhook=row["slack_webhook_url_encrypted"],
-                environ=environ)
+                environ=environ, ui_url=ui_url)
 
     for row in find_new_clusters(conn):
         if stop.is_set():
             return
         deliver(conn, "new_cluster", row["cluster_id"], cluster_message(row, ui_url),
                 project_id=row["project_id"], encrypted_webhook=row["slack_webhook_url_encrypted"],
-                environ=environ)
+                environ=environ, ui_url=ui_url)
 
 
 def main():

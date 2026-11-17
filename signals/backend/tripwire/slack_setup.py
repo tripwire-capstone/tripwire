@@ -1,16 +1,17 @@
-"""Turn Slack notifications on or off for a project, until the settings UI exists.
+"""Turn Slack notifications on or off for a project from the command line (the Settings page does the same).
 
     python -m tripwire.slack_setup connect [WEBHOOK_URL]
     python -m tripwire.slack_setup status
     python -m tripwire.slack_setup disconnect
 
-connect encrypts the webhook with TRIPWIRE_SECRET_KEY (tripwire/crypto.py) and stores it on the project. Leave
-WEBHOOK_URL out to read TRIPWIRE_SLACK_WEBHOOK_URL from the environment (or .env), which keeps
-the URL out of your shell history. Only alerts for runs and clusters that finish after
+connect posts a connect message to the webhook and, if Slack accepts it, encrypts the webhook with
+TRIPWIRE_SECRET_KEY (tripwire/crypto.py) and stores it on the project. disconnect posts a goodbye
+first. Leave WEBHOOK_URL out to read TRIPWIRE_SLACK_WEBHOOK_URL from the environment (or .env),
+which keeps the URL out of your shell history. Only alerts for runs and clusters that finish after
 connecting are sent; reconnecting starts that clock again.
 
 --project picks the project by name (default: the seeded "default" project).
-Settings (env or .env): DATABASE_URL, TRIPWIRE_SECRET_KEY.
+Settings (env or .env): DATABASE_URL, TRIPWIRE_SECRET_KEY, TRIPWIRE_UI_URL (links in the connect message).
 """
 
 import argparse
@@ -20,7 +21,9 @@ import psycopg
 from dotenv import load_dotenv
 
 from . import crypto
-from .api.slack_settings import disconnect_slack, get_slack_status, save_slack_webhook
+from .api.slack_settings import (SlackRefused, SlackUnavailable, connect_slack, disconnect_slack,
+                                 get_slack_status, get_ui_url)
+from .slack import post_slack
 
 DEFAULT_PROJECT = "default"
 
@@ -65,11 +68,13 @@ def main(argv=None):
             if not webhook_url.strip():
                 raise SystemExit("Pass a webhook URL or set TRIPWIRE_SLACK_WEBHOOK_URL")
             try:
-                status = save_slack_webhook(conn, project_id, webhook_url)
-            except (ValueError, crypto.SecretKeyError) as error:
+                status = connect_slack(conn, project_id, webhook_url, ui_url=get_ui_url())
+            except (ValueError, crypto.SecretKeyError, SlackRefused) as error:
                 raise SystemExit(str(error)) from None
+            except SlackUnavailable as error:
+                raise SystemExit(f"Couldn't reach Slack, so the webhook wasn't saved ({error})") from None
         elif args.command == "disconnect":
-            status = disconnect_slack(conn, project_id)
+            status = disconnect_slack(conn, project_id, post=post_slack)
         else:
             status = get_slack_status(conn, project_id)
     print(describe(status))
