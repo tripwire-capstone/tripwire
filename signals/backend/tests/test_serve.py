@@ -6,6 +6,8 @@ from fastapi.testclient import TestClient
 from tripwire.api.app import app as api_app
 from tripwire.api.db import get_conn
 from tripwire.api.serve import build_app, normalize_base_path, page_with_base
+from tripwire.mcp_server.server import with_mcp
+from tripwire.mcp_server.settings import load
 
 INDEX = '<html><head><base href="/" /></head><body><div id="root"></div></body></html>'
 
@@ -110,3 +112,35 @@ def test_serve_without_a_built_ui_still_serves_the_api(tmp_path):
     client = TestClient(build_app(tmp_path / "missing", "/tripwire"))
     assert client.get("/tripwire/api/health").json() == {"ok": True}
     assert client.get("/tripwire/").status_code == 404
+
+
+
+# ------------------------------------------------------------------ MCP inside the API
+
+MCP_ENV = {"MCP_COGNITO_REGION": "us-east-1", "MCP_COGNITO_USER_POOL_ID": "us-east-1_Pool",
+           "MCP_COGNITO_CLIENT_ID": "mcp-client", "MCP_PUBLIC_URL": "https://laminar.example.com/tripwire/api/mcp"}
+
+
+def with_mcp_app(env):
+    """A fresh API-with-MCP (each one's MCP session manager can only start once)."""
+    return with_mcp(api_app, load(env))
+
+
+def test_serve_passes_the_mcp_login_document_outside_the_prefix_to_the_api(ui_dir):
+    # MCP clients ask for it at the host's root, outside /tripwire: it must not get the UI or a 404
+    with TestClient(build_app(ui_dir, "/tripwire", with_mcp_app(MCP_ENV)),
+                    base_url="https://laminar.example.com") as client:
+        response = client.get("/.well-known/oauth-protected-resource/tripwire/api/mcp")
+    assert response.status_code == 200
+    assert response.json()["resource"] == "https://laminar.example.com/tripwire/api/mcp"
+
+
+def test_serve_reaches_mcp_under_the_prefix(ui_dir):
+    initialize = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                  "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                             "clientInfo": {"name": "test", "version": "1"}}}
+    with TestClient(build_app(ui_dir, "/tripwire", with_mcp_app({})), base_url="http://localhost:8080") as client:
+        response = client.post("/tripwire/api/mcp", json=initialize,
+                               headers={"Accept": "application/json, text/event-stream"})
+        assert response.status_code == 200
+        assert client.get("/tripwire/api/health").json() == {"ok": True}

@@ -48,7 +48,7 @@ always describe the whole time range, however many events it holds.
 | `GET /api/signals/{id}/run-counts?bucket_minutes&...same filters` | finished runs per bucket: `[{ bucket, event, nothing, failed }]` |
 | `GET /api/signals/{id}/clusters?since&until` | `{ events, clustered_events, clusters: [...] }`, clusters with events in the range, most first |
 | `GET /api/overview?bucket_minutes&since&until` | everything Home shows |
-| `GET /api/clusters/{id}?examples` | one cluster over all time: counts, conversations, first and last seen, up to 20 summaries and causes, and `examples` (default 3, max 10) example events. No page uses it yet; the MCP server does (`signals/backend/MCP.md`) |
+| `GET /api/clusters/{id}?examples` | one cluster over all time: counts, conversations, first and last seen, up to 20 summaries and causes, and `examples` (default 3, max 10) example events. No page uses it yet; the MCP server does (`signals/backend/MCP.md`, served at `/api/mcp`) |
 
 - **Search** (`q`) is case-insensitive "contains", over field *values* (not field names), trace ID, severity
   and evidence labels for events; status, source, trace ID and error for runs. An exact ID also matches.

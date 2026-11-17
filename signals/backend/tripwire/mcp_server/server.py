@@ -1,9 +1,13 @@
-"""The MCP server: two read-only tools over the Tripwire API, served over streamable HTTP."""
+"""The MCP server: two read-only tools over the Tripwire API, served inside the API at /api/mcp.
+
+The tools call the API in-process (no network hop), through the same routes the UI uses.
+"""
 
 import logging
 from typing import Annotated
 from urllib.parse import urlsplit
 
+import httpx
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
@@ -12,9 +16,14 @@ from pydantic import Field
 from . import format
 from .api import TripwireAPI
 from .auth import CognitoVerifier
-from .settings import READ_SCOPE, Settings, SettingsError, load
+from .settings import READ_SCOPE, Settings, load
 
 log = logging.getLogger("mcp_server")
+
+# Where MCP is served inside the API, below any path prefix (on AWS: /tripwire/api/mcp)
+MCP_PATH = "/api/mcp"
+# Where clients find which login to use (RFC 9728); always at the host's root
+LOGIN_DOCUMENT_PREFIX = "/.well-known/oauth-protected-resource"
 
 INSTRUCTIONS = """Tripwire watches an AI agent's conversations with "signals" (an LLM judge looking for one
 kind of problem) and groups similar findings into clusters. Start with list_problem_clusters to see
@@ -22,8 +31,7 @@ the biggest problems, then get_cluster for what goes wrong in one cluster, its l
 example events with links to their traces in Laminar."""
 
 
-def build(settings: Settings, api: TripwireAPI | None = None, verifier=None) -> MCPServer:
-    api = api or TripwireAPI(settings.api_url)
+def build(settings: Settings, api: TripwireAPI, verifier=None) -> MCPServer:
     auth = None
     if settings.cognito:
         verifier = verifier or CognitoVerifier(settings.cognito)
@@ -68,19 +76,40 @@ def transport_security(settings: Settings) -> TransportSecuritySettings:
                                      allowed_origins=origins)
 
 
-def main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    try:
-        settings = load()
-    except SettingsError as e:
-        raise SystemExit(f"mcp_server: {e}")
+def route_path(scope) -> str:
+    """The request path below any prefix the app is mounted under."""
+    path, root = scope["path"], scope.get("root_path", "")
+    return path[len(root):] if root and path.startswith(root) else path
+
+
+def with_mcp(api_app, settings: Settings | None = None, verifier=None):
+    """`api_app` with the MCP server answering at /api/mcp (and its login document); every other
+    request goes to `api_app` unchanged."""
+    settings = settings or load()
+    if settings.cognito is None and not settings.is_local:
+        log.error("MCP is not served: %s isn't a local address and auth is off (no MCP_COGNITO_* settings)",
+                  settings.public_url)
+        return api_app
     if settings.cognito:
-        log.info("auth is on: Cognito pool %s, app client %s", settings.cognito.user_pool_id,
-                 settings.cognito.client_id)
+        log.info("MCP at %s, auth on: Cognito pool %s, app client %s", settings.public_url,
+                 settings.cognito.user_pool_id, settings.cognito.client_id)
     else:
-        log.warning("auth is off: no MCP_COGNITO_* settings. Anyone who can reach %s can read clusters.",
+        log.warning("MCP at %s, auth off: anyone who can reach this address can read clusters",
                     settings.public_url)
-    log.info("serving %s (listening on %s:%s), reading %s", settings.public_url, settings.host,
-             settings.port, settings.api_url)
-    build(settings).run("streamable-http", host=settings.host, port=settings.port,
-                        streamable_http_path=settings.path, transport_security=transport_security(settings))
+
+    api = TripwireAPI("http://tripwire", httpx.ASGITransport(app=api_app))
+    mcp_app = build(settings, api, verifier).streamable_http_app(
+        streamable_http_path=MCP_PATH, transport_security=transport_security(settings))
+
+    async def app(scope, receive, send):
+        # The MCP app's startup and shutdown run its session manager; the API has none of its own
+        if scope["type"] == "lifespan":
+            await mcp_app(scope, receive, send)
+            return
+        path = route_path(scope)
+        if scope["type"] == "http" and (path == MCP_PATH or path.startswith(LOGIN_DOCUMENT_PREFIX)):
+            await mcp_app(scope, receive, send)
+            return
+        await api_app(scope, receive, send)
+
+    return app

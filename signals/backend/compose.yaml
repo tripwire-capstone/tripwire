@@ -8,9 +8,9 @@
 #   runner     PLACEHOLDER: traces -> runs + some events, every 5 s
 #   clusterer  events -> summaries -> vectors -> clusters every 10 s (needs OPENAI_API_KEY in .env;
 #              CLUSTERER_MODE=placeholder runs without OpenAI). Has a healthcheck: `docker compose ps`.
-#   api        the HTTP API the UI reads, on http://localhost:8080
-#   mcp        the MCP server for coding agents, on http://localhost:8090/mcp (MCP.md). Auth is off
-#              unless the MCP_COGNITO_* settings are in .env.
+#   api        the HTTP API the UI reads, on http://localhost:8080, with the MCP server for coding
+#              agents inside it at http://localhost:8080/api/mcp (MCP.md). MCP's auth is off unless
+#              the MCP_COGNITO_* settings are in .env.
 #
 # dev view: is data flowing? Once the UI runs, open http://localhost:5174/dev.
 
@@ -82,22 +82,9 @@ services:
 
   api:
     <<: *backend
-    command: uvicorn tripwire.api.app:app --host 0.0.0.0 --port 8080
+    command: uvicorn tripwire.api.asgi:app --host 0.0.0.0 --port 8080
     ports:
       - "8080:8080"
 
-  mcp:
-    <<: *backend
-    command: python -m tripwire.mcp_server
-    environment:
-      TRIPWIRE_API_URL: http://api:8080
-      MCP_HOST: 0.0.0.0                       # inside the container; the port below limits who can reach it
-      MCP_PORT: "8090"
-      MCP_PUBLIC_URL: http://localhost:8090/mcp
-    ports:
-      - "127.0.0.1:8090:8090"                 # this machine only: with auth off, nothing else may reach it
-    depends_on:
-      api:
-        condition: service_started
 volumes:
   pgdata:

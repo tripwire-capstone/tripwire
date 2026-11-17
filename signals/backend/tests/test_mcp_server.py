@@ -14,7 +14,7 @@ from starlette.testclient import TestClient
 
 from tripwire.mcp_server.api import TripwireAPI
 from tripwire.mcp_server.auth import CognitoVerifier
-from tripwire.mcp_server.server import build, transport_security
+from tripwire.mcp_server.server import build, transport_security, with_mcp
 from tripwire.mcp_server.settings import Cognito, SettingsError, load
 
 COGNITO_ENV = {"MCP_COGNITO_REGION": "us-east-1", "MCP_COGNITO_USER_POOL_ID": "us-east-1_Pool",
@@ -40,8 +40,7 @@ CLUSTER = {
 def test_no_cognito_settings_means_auth_off():
     settings = load({})
     assert settings.cognito is None
-    assert (settings.api_url, settings.public_url, settings.path) == \
-        ("http://localhost:8080", "http://localhost:8090/mcp", "/mcp")
+    assert settings.public_url == "http://localhost:8080/api/mcp" and settings.is_local
 
 
 def test_all_cognito_settings_turn_auth_on():
@@ -57,11 +56,11 @@ def test_some_cognito_settings_refuse_to_start():
 
 def test_public_url_must_be_a_full_url():
     with pytest.raises(SettingsError):
-        load({"MCP_PUBLIC_URL": "localhost:8090/mcp"})
+        load({"MCP_PUBLIC_URL": "localhost:8080/api/mcp"})
 
 
 def test_only_its_own_host_names_are_served():
-    security = transport_security(load({"MCP_PUBLIC_URL": "https://tripwire.example.com/mcp"}))
+    security = transport_security(load({"MCP_PUBLIC_URL": "https://tripwire.example.com/tripwire/api/mcp"}))
     assert security.enable_dns_rebinding_protection
     assert "tripwire.example.com" in security.allowed_hosts and "localhost:*" in security.allowed_hosts
 
@@ -209,14 +208,28 @@ class AcceptOne:
                            expires_at=int(time.time()) + 600)
 
 
-@pytest.fixture
-def http_with_auth():
-    settings = load(COGNITO_ENV)
-    server = build(settings, api=TripwireAPI("http://api.test", httpx.MockTransport(overview([]))),
-                   verifier=AcceptOne())
-    app = server.streamable_http_app(streamable_http_path="/mcp", transport_security=transport_security(settings))
-    with TestClient(app, base_url="http://localhost:8090") as client:
-        yield client
+async def fake_api(scope, receive, send):
+    """Stands in for the API: answers every request with 200 "api"."""
+    if scope["type"] != "http":
+        return
+    await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/plain")]})
+    await send({"type": "http.response.body", "body": b"api"})
+
+
+def serve(env, prefix=""):
+    app = with_mcp(fake_api, load(env), verifier=AcceptOne())
+    if prefix:
+        app = mounted_under(prefix, app)
+    return TestClient(app, base_url="http://localhost:8080")
+
+
+def mounted_under(prefix, app):
+    """`app` as serve.py runs it on AWS: under a path prefix (root_path set)."""
+    async def prefixed(scope, receive, send):
+        if scope["type"] == "http":
+            scope = {**scope, "root_path": prefix}
+        await app(scope, receive, send)
+    return prefixed
 
 
 INITIALIZE = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -225,22 +238,50 @@ INITIALIZE = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
 HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
 
 
-def test_no_token_is_401_pointing_to_the_login(http_with_auth):
-    r = http_with_auth.post("/mcp", json=INITIALIZE, headers=HEADERS)
+def test_mcp_answers_at_api_mcp_and_everything_else_reaches_the_api():
+    with serve({}) as client:
+        assert client.post("/api/mcp", json=INITIALIZE, headers=HEADERS).status_code == 200
+        assert client.get("/api/signals").text == "api"
+
+
+def test_without_auth_mcp_is_only_served_on_a_local_address():
+    app = with_mcp(fake_api, load({"MCP_PUBLIC_URL": "https://tripwire.example.com/tripwire/api/mcp"}))
+    assert app is fake_api
+
+
+def test_no_token_is_401_pointing_to_the_login():
+    with serve(COGNITO_ENV) as client:
+        r = client.post("/api/mcp", json=INITIALIZE, headers=HEADERS)
     assert r.status_code == 401
-    assert "resource_metadata=" in r.headers["www-authenticate"]
+    assert "/.well-known/oauth-protected-resource/api/mcp" in r.headers["www-authenticate"]
 
 
-def test_metadata_names_cognito_as_the_login(http_with_auth):
-    r = http_with_auth.get("/.well-known/oauth-protected-resource/mcp")
-    assert r.status_code == 200
-    body = r.json()
+def test_login_document_names_cognito():
+    with serve(COGNITO_ENV) as client:
+        body = client.get("/.well-known/oauth-protected-resource/api/mcp").json()
     assert body["authorization_servers"] == [COGNITO.issuer]
+    assert body["resource"] == "http://localhost:8080/api/mcp"
     assert "tripwire-mcp/read" in body["scopes_supported"]
 
 
-def test_a_bad_token_is_401_and_a_good_one_gets_in(http_with_auth):
-    bad = http_with_auth.post("/mcp", json=INITIALIZE, headers={**HEADERS, "Authorization": "Bearer bad"})
-    good = http_with_auth.post("/mcp", json=INITIALIZE, headers={**HEADERS, "Authorization": "Bearer good"})
-    assert bad.status_code == 401
-    assert good.status_code == 200
+def test_a_bad_token_is_401_and_a_good_one_gets_in():
+    with serve(COGNITO_ENV) as client:
+        bad = client.post("/api/mcp", json=INITIALIZE, headers={**HEADERS, "Authorization": "Bearer bad"})
+        good = client.post("/api/mcp", json=INITIALIZE, headers={**HEADERS, "Authorization": "Bearer good"})
+    assert (bad.status_code, good.status_code) == (401, 200)
+
+
+def test_under_the_aws_prefix_the_login_document_names_the_full_address():
+    env = {**COGNITO_ENV, "MCP_PUBLIC_URL": "https://tripwire.example.com/tripwire/api/mcp"}
+    app = with_mcp(fake_api, load(env), verifier=AcceptOne())
+    with TestClient(mounted_under("/tripwire", app), base_url="https://tripwire.example.com") as client:
+        r = client.post("/tripwire/api/mcp", json=INITIALIZE, headers=HEADERS)
+        assert r.status_code == 401
+        assert "https://tripwire.example.com/.well-known/oauth-protected-resource/tripwire/api/mcp" in \
+            r.headers["www-authenticate"]
+    # The login document is requested at the host's root, outside the prefix (a fresh app: each
+    # one's session manager starts once)
+    app = with_mcp(fake_api, load(env), verifier=AcceptOne())
+    with TestClient(app, base_url="https://tripwire.example.com") as client:
+        doc = client.get("/.well-known/oauth-protected-resource/tripwire/api/mcp")
+    assert doc.json()["resource"] == "https://tripwire.example.com/tripwire/api/mcp"

@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 COGNITO_SETTINGS = ("MCP_COGNITO_REGION", "MCP_COGNITO_USER_POOL_ID", "MCP_COGNITO_CLIENT_ID")
 READ_SCOPE = "tripwire-mcp/read"
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 
 class SettingsError(Exception):
@@ -33,15 +34,13 @@ class Cognito:
 
 @dataclass(frozen=True)
 class Settings:
-    api_url: str              # the Tripwire API this server reads from
-    public_url: str           # the address clients connect to, e.g. http://localhost:8090/mcp
-    host: str                 # the address to listen on
-    port: int
+    public_url: str           # the address clients connect to, e.g. http://localhost:8080/api/mcp
     cognito: Cognito | None   # None = auth off
 
     @property
-    def path(self) -> str:
-        return urlsplit(self.public_url).path or "/mcp"
+    def is_local(self) -> bool:
+        """Only this machine uses the address, so running without auth is acceptable."""
+        return urlsplit(self.public_url).hostname in LOCAL_HOSTS
 
 
 def load(env=os.environ) -> Settings:
@@ -52,13 +51,7 @@ def load(env=os.environ) -> Settings:
         raise SettingsError(f"auth needs all of {', '.join(COGNITO_SETTINGS)}; missing {', '.join(missing)}")
     cognito = Cognito(*(given[name] for name in COGNITO_SETTINGS)) if present else None
 
-    public_url = env.get("MCP_PUBLIC_URL", "http://localhost:8090/mcp").strip()
+    public_url = env.get("MCP_PUBLIC_URL", "").strip() or "http://localhost:8080/api/mcp"
     if urlsplit(public_url).scheme not in ("http", "https") or not urlsplit(public_url).netloc:
         raise SettingsError(f"MCP_PUBLIC_URL must be a full http(s) URL, got {public_url!r}")
-    try:
-        port = int(env.get("MCP_PORT", "8090"))
-    except ValueError:
-        raise SettingsError("MCP_PORT must be a number")
-    return Settings(api_url=env.get("TRIPWIRE_API_URL", "http://localhost:8080").rstrip("/"),
-                    public_url=public_url, host=env.get("MCP_HOST", "127.0.0.1"), port=port,
-                    cognito=cognito)
+    return Settings(public_url=public_url, cognito=cognito)
