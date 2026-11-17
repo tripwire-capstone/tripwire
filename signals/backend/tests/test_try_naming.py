@@ -10,11 +10,13 @@ from tripwire.clusterer.llm_naming import load_naming_prompt
 from tripwire.clusterer.try_naming import (
     Tried,
     ask_all,
+    ask_rename,
     first_members,
     laminar_leaf_name,
     laminar_majority,
     load_clusters,
     model_stats,
+    render_rename_report,
     render_report,
 )
 from tripwire.llm import LLMRefused, LLMUsage
@@ -139,12 +141,65 @@ def test_load_clusters_skips_clusters_with_nothing_summarized_and_cuts_to_the_fi
     add_member(conn, add_event(conn, version_id, vector_at(0.1, 9)), empty)   # no summary
 
     loaded, earliest = load_clusters(conn, signal_filter=None, as_of=None)
-    assert [t.cluster_id for t, _, _ in loaded] == [cluster_id]
-    tried_row, cluster, traces = loaded[0]
+    assert [t.cluster_id for t, _, _, _ in loaded] == [cluster_id]
+    tried_row, cluster, traces, _ = loaded[0]
     assert (tried_row.size, len(traces), earliest is not None) == (4, 4, True)
 
     first_two = [joined[2], joined[3]]
-    [(tried_row, cluster, traces)] = load_clusters(conn, signal_filter="issues", as_of=2)[0]
+    [(tried_row, cluster, traces, _)] = load_clusters(conn, signal_filter="issues", as_of=2)[0]
     assert sorted(m.event_id for m in cluster.members) == sorted(first_two)
     assert (tried_row.size, len(traces)) == (2, 2)
     assert load_clusters(conn, signal_filter="Intent", as_of=None)[0] == []
+
+
+# ------------------------------------------------------------------ --rename-from
+
+def test_ask_rename_names_small_then_renames_with_that_name_shown_then_names_fresh():
+    llm = FakeLLM([{"name": "Small Name"}, {"name": "Small Name"}, {"name": "Fresh Name"}])
+    full = cluster_input(10)
+    result = ask_rename(llm, ["model-a"], load_naming_prompt(), full, {1, 2, 3}, tried())
+    small_call, rename_call, fresh_call = (r["messages"][1]["content"] for r in llm.requests)
+    assert "size: 3 findings" in small_call and "current name" not in small_call
+    assert "size: 10 findings" in rename_call and "current name: Small Name" in rename_call
+    assert "size: 10 findings" in fresh_call and "current name" not in fresh_call
+    answer = result.answers["model-a"]
+    assert (answer["at_n"], answer["renamed"], answer["fresh"], answer["kept"]) == (
+        "Small Name", "Small Name", "Fresh Name", True)
+    assert answer["input_tokens"] == 3 * llm.usage.input_tokens
+
+
+def test_ask_rename_records_a_changed_name_and_an_error():
+    llm = FakeLLM([{"name": "Small"}, {"name": "Broader"}, {"name": "Fresh"}, LLMRefused("no")])
+    result = ask_rename(llm, ["model-a", "model-b"], load_naming_prompt(), cluster_input(10),
+                        {1, 2, 3}, tried())
+    assert result.answers["model-a"]["kept"] is False
+    assert result.answers["model-b"] == {"error": "LLMRefused: no"}
+
+
+def test_rename_report_counts_kept_and_changed_names():
+    first, second = tried(1), tried(2)
+    first.answers = {"m1": {"at_n": "A", "renamed": "A", "fresh": "B", "kept": True, "seconds": 1,
+                            "input_tokens": 3, "output_tokens": 1}}
+    second.answers = {"m1": {"at_n": "C", "renamed": "D", "fresh": "D", "kept": False, "seconds": 1,
+                             "input_tokens": 3, "output_tokens": 1}}
+    report = render_rename_report([first, second], ["m1"], {"taken_at": "now", "prompt_version": 1,
+                                                            "rename_from": 3})
+    assert "| m1 | 2 | 1 | 1 | 0 |" in report
+    assert "| 1 | 3 | m1 | A | A | kept | B |" in report
+    assert "| 2 | 3 | m1 | C | D | changed | D |" in report
+
+
+def test_rename_from_takes_only_clusters_the_clusterer_would_rename(conn):
+    signal_id, version_id = add_signal(conn, name="Issues")
+    sizes = {}
+    for size in (5, 6):
+        cluster_id = add_cluster(conn, signal_id, base_vector())
+        for index in range(size):
+            event_id = add_event(conn, version_id, vector_at(0.1, index + 1))
+            add_member(conn, event_id, cluster_id)
+            add_summary(conn, event_id, f"summary {index}")
+        sizes[cluster_id] = size
+    loaded, _ = load_clusters(conn, signal_filter=None, as_of=None, rename_from=3)
+    [(tried_row, cluster, _, first_ids)] = loaded
+    assert sizes[tried_row.cluster_id] == 6                      # 5 < 2 x 3: not renamed yet
+    assert len(first_ids) == 3 and cluster.member_count == 6
