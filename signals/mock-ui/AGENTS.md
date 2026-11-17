@@ -4,8 +4,8 @@ Read this before changing anything in `mock-ui/`. What each screen shows is in `
 Before touching a signals page or `src/api/`, also read `SIGNALS_API.md` (how they're wired to the API).
 
 - **One data source: the real API.** Every page reads it through `src/api/` (hooks such as `useSignals`,
-  `useSignal`, `useEvents`, `useEventCounts`, `useRuns`, `useRunCounts`, `useClusters`, `useOverview`, and actions
-  `createSignal`, `editSignal`, `setActive`, `testRun`). Never call `fetch` in a page; add a function to
+  `useSignal`, `useEvents`, `useEventCounts`, `useRuns`, `useRunCounts`, `useClusters`, `useOverview`, `useSettings`, and actions
+  `createSignal`, `editSignal`, `setActive`, `testRun`, `saveKey`, `clearKey`). Never call `fetch` in a page; add a function to
   `src/api/` instead. `src/api/adapt.js` turns API responses into the shapes the pages use. There is no fake data.
 - **Count in the database, never in the page.** Totals, charts, filters, search and paging come from the API
   (lists return `{ total, ... }` for one page; `*-counts` endpoints return per-bucket counts with the same
@@ -26,7 +26,7 @@ Before touching a signals page or `src/api/`, also read `SIGNALS_API.md` (how th
 - **Charts over time:** `TimeBarChart` (bars) and `TimeLineChart` (lines, for dashboard cards) from `src/components/Charts.jsx`. Cluster colors: `clusterColor(i)` from `theme.js`
   (events in no cluster use `UNCLUSTERED_COLOR`).
 - Read `SPEC.md` before building a page. Build only what it describes; ask instead of inventing features.
-- Use Mantine components and `src/theme.js`. No hard-coded colors, font sizes or spacing.
+- Use Mantine components and `src/theme.js`. No hard-coded colors, font sizes or spacing. Icons: `@tabler/icons-react` (size 18, stroke 1.6, as in the sidebar).
 - Conventions: main action = filled `Button`; secondary = `variant="light"`; tertiary = `variant="subtle" color="gray"`.
   Severity badges: `SeverityBadge`. Preset/custom badges: `KindBadge`. Times and counts: `formatTime`, `formatDay`, `formatRelative(iso, asOf)`, `formatCost`, `shortId`, `plural` from `src/components/format.js`.
 - Reuse components from `src/components/` and the hooks in `src/api/`. Don't copy data into a page.

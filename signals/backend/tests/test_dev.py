@@ -386,9 +386,8 @@ def test_traces_stored_recently_and_last_poll(client, conn):
 
 def test_a_project_never_polled_makes_last_poll_empty(client, conn):
     conn.execute("UPDATE projects SET last_polled_at = now()")
-    conn.execute("""INSERT INTO projects (name, laminar_api_url, laminar_ui_url, laminar_api_key_encrypted,
-                                          laminar_api_key_hint)
-                    VALUES ('second', 'http://x', 'http://x', 'k', 'k')""")
+    conn.execute("""INSERT INTO projects (name, laminar_api_url, laminar_ui_url)
+                    VALUES ('second', 'http://x', 'http://x')""")
 
     assert status(client)["pipeline"]["last_polled_at"] is None
 
