@@ -17,7 +17,16 @@ The pieces, in call order (one pass of step 4):
                   name as stored, or LLMBadOutput if it isn't usable
   save            one short transaction: re-checks the Signal's names for duplicates, then writes
                   the name only if nobody changed the cluster's name since it was read
-  ... (name_clusters: next piece)
+  name_clusters   one pass of step 4: every job through load_input -> ask_llm -> save, with the
+                  failure rules below. Namer wraps it with its settings for loop.run_pass.
+
+When the LLM can't name a cluster (llm.LLMError: bad or unusable output, refused, too long, or
+the service is down): a NEW cluster gets the fallback (its closest member's summary, marked
+'fallback', retried at its next doubling); a RENAME keeps the current name (named_member_count
+unchanged, so it's due again next pass). After a service error (timeout, rate limit, outage) no
+more calls are made this pass: the rest of the new clusters get their fallback at once and the
+renames wait, so an outage can't hang a pass for a timeout per cluster. Any other error (a wrong
+key, a bad model name, a bug) is not caught: the step fails loudly and loop.py logs it (Q20).
 
 No LLM call happens inside a database transaction: every read ends before the call, and each
 write is its own short transaction that checks nothing changed meanwhile.
@@ -33,7 +42,7 @@ from fractions import Fraction
 
 from .naming import NAME_CANDIDATES_SQL, unique_name
 from .sql import leaf_cluster
-from ..llm import LLMBadOutput
+from ..llm import LLMBadOutput, LLMError, LLMServiceError
 from .summarize import PROMPTS, Prompt
 
 log = logging.getLogger("clusterer.naming")
@@ -334,3 +343,81 @@ def save(conn, job, name, source, member_count):
         log.info("cluster %s was named by someone else meanwhile; left as it is", job.cluster_id)
         return None
     return stored
+
+
+# ------------------------------------------------------------------ one pass of step 4
+
+@dataclass
+class NamingResult:
+    named: int = 0          # new clusters, LLM name
+    fallback: int = 0       # new clusters, fallback name (the LLM couldn't)
+    renamed: int = 0        # renames written (an unchanged name counts too: it's re-recorded)
+    kept: int = 0           # renames the LLM couldn't do: current name kept, retried next pass
+    skipped: int = 0        # named by someone else meanwhile, or no members left
+    service_down: bool = False  # a service error stopped the calls for this pass
+
+    def written(self):
+        return self.named + self.fallback + self.renamed
+
+    def anything_happened(self):
+        return bool(self.written() or self.kept or self.skipped)
+
+
+def name_clusters(conn, llm, model, prompt, growth, max_renames):
+    """One pass of step 4. Returns a NamingResult; raises only for non-LLM errors."""
+    result = NamingResult()
+    for job in find_work(conn, growth, max_renames):
+        cluster = load_input(conn, job)
+        if cluster is None:
+            result.skipped += 1
+            continue
+
+        name = None
+        if not result.service_down:
+            try:
+                name, _ = ask_llm(llm, model, cluster, prompt)
+            except LLMServiceError as error:
+                result.service_down = True
+                log.warning("naming: OpenAI unavailable (%s); no more naming calls this pass", error)
+            except LLMError as error:
+                log.warning("naming: cluster %s: %s: %s", job.cluster_id, type(error).__name__, error)
+
+        if name is not None:
+            source = "llm"
+        elif job.kind == "new":
+            name, source = job.fallback, "fallback"
+        else:
+            result.kept += 1
+            continue
+
+        stored = save(conn, job, name, source, cluster.member_count)
+        if stored is None:
+            result.skipped += 1
+        elif job.kind == "rename":
+            result.renamed += 1
+        elif source == "llm":
+            result.named += 1
+        else:
+            result.fallback += 1
+    return result
+
+
+class Namer:
+    """Step 4 with its settings, as loop.run_pass calls it: name(conn) -> clusters written.
+    Built once at startup (like Preparer), so the OpenAI client and the prompt are reused."""
+
+    def __init__(self, llm, model, growth, max_renames, prompt=None):
+        self.llm = llm
+        self.model = model
+        self.growth = growth
+        self.max_renames = max_renames
+        self.prompt = prompt or load_naming_prompt()
+
+    def __call__(self, conn):
+        result = name_clusters(conn, self.llm, self.model, self.prompt, self.growth,
+                               self.max_renames)
+        if result.anything_happened():
+            log.info("naming: %d named, %d fallback, %d renamed, %d kept, %d skipped%s",
+                     result.named, result.fallback, result.renamed, result.kept, result.skipped,
+                     " (stopped calling after a service error)" if result.service_down else "")
+        return result.written()

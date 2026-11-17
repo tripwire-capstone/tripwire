@@ -3,7 +3,7 @@
 import pytest
 
 from tripwire.clusterer.llm_client import FakeLLM
-from tripwire.llm import LLMBadOutput, LLMServiceError
+from tripwire.llm import LLMBadOutput, LLMRefused, LLMServiceError
 
 from tests.clustering_data import (
     add_cluster,
@@ -27,6 +27,9 @@ from tripwire.clusterer.llm_naming import (
     find_work,
     load_naming_prompt,
     load_input,
+    Namer,
+    NamingResult,
+    name_clusters,
     pick_sample,
     save,
     rename_is_due,
@@ -522,3 +525,113 @@ def test_a_rename_that_keeps_the_name_gets_no_number(conn):
     job = rename_job(conn, cluster_id, signal_id)
     assert save(conn, job, "Refund Delays", "llm", 8) == "Refund Delays"
     assert naming_row(conn, cluster_id)[::3] == ("Refund Delays", 8)
+
+
+# ------------------------------------------------------------------ name_clusters (database)
+
+def run(conn, llm, growth=2.0, max_renames=10):
+    return name_clusters(conn, llm, "test-model", load_naming_prompt(), growth, max_renames)
+
+
+def new_clusters(conn, count, signal_name="Signal A"):
+    """`count` unnamed clusters of 3 summarized members each; the closest summary is
+    'closest {n}'. Returns (signal_id, [cluster IDs])."""
+    signal_id, version_id = add_signal(conn, name=signal_name)
+    ids = []
+    for n in range(count):
+        cluster_id = add_cluster(conn, signal_id, base_vector())
+        member(conn, version_id, cluster_id, distance=0.05, axis=1, summary=f"closest {n}")
+        member(conn, version_id, cluster_id, distance=0.2, axis=2, summary=f"other {n}")
+        member(conn, version_id, cluster_id, distance=0.25, axis=3, summary=f"third {n}")
+        ids.append(cluster_id)
+    return signal_id, ids
+
+
+def test_new_clusters_get_llm_names_with_their_size(conn):
+    _, (first, second) = new_clusters(conn, 2)
+    result = run(conn, FakeLLM([{"name": "Refund Delays"}, {"name": "Wrong Size Shipped"}]))
+    assert result == NamingResult(named=2)
+    assert naming_row(conn, first)[::3] == ("Refund Delays", 3)
+    assert naming_row(conn, second)[:2] == ("Wrong Size Shipped", "llm")
+
+
+def test_a_new_cluster_the_llm_cant_name_gets_the_fallback(conn):
+    _, (first, second) = new_clusters(conn, 2)
+    result = run(conn, FakeLLM([LLMRefused("no"), {"name": ""}]))     # refused, then unusable
+    assert result == NamingResult(fallback=2)
+    assert naming_row(conn, first)[:2] == ("closest 0", "fallback")
+    assert naming_row(conn, second)[:2] == ("closest 1", "fallback")
+
+
+def test_after_a_service_error_no_more_calls_are_made_this_pass(conn):
+    signal_id, new_ids = new_clusters(conn, 3)
+    old_step = named_cluster(conn, signal_id, "An old-step sentence.")
+    version_id = conn.execute("SELECT id FROM signal_versions WHERE signal_id = %s",
+                              (signal_id,)).fetchone()[0]
+    member(conn, version_id, old_step)                               # give it a summarized member
+    llm = FakeLLM([LLMServiceError("timeout")])
+    result = run(conn, llm)
+    assert len(llm.requests) == 1
+    assert result == NamingResult(fallback=3, kept=1, service_down=True)
+    assert [naming_row(conn, c)[1] for c in new_ids] == ["fallback"] * 3
+    assert naming_row(conn, old_step)[:2] == ("An old-step sentence.", None)   # waits
+
+
+def test_a_rename_the_llm_cant_do_keeps_the_name_and_is_due_again_next_pass(conn):
+    signal_id, version_id = add_signal(conn)
+    cluster_id = cluster_with(conn, signal_id, version_id, 4, name="Refund Delays", source="llm",
+                              named_count=2)
+    result = run(conn, FakeLLM([LLMRefused("no")]))
+    assert result == NamingResult(kept=1)
+    assert naming_row(conn, cluster_id)[::3] == ("Refund Delays", 2)
+    assert run(conn, FakeLLM([{"name": "Refund And Return Delays"}])) == NamingResult(renamed=1)
+    assert naming_row(conn, cluster_id)[::3] == ("Refund And Return Delays", 4)
+
+
+def test_an_old_step_name_is_replaced_and_never_shown_to_the_llm(conn):
+    signal_id, version_id = add_signal(conn)
+    cluster_id = cluster_with(conn, signal_id, version_id, 3, name="The old-step sentence.")
+    llm = FakeLLM([{"name": "Refund Delays"}])
+    assert run(conn, llm) == NamingResult(renamed=1)
+    assert "The old-step sentence." not in llm.requests[0]["messages"][1]["content"]
+    assert naming_row(conn, cluster_id)[:2] == ("Refund Delays", "llm")
+
+
+def test_a_second_pass_with_nothing_new_makes_no_calls(conn):
+    new_clusters(conn, 2)
+    run(conn, FakeLLM([{"name": "Refund Delays"}, {"name": "Wrong Size Shipped"}]))
+    llm = FakeLLM([])
+    assert run(conn, llm) == NamingResult() and llm.requests == []
+
+
+def test_a_cluster_named_during_the_call_is_left_alone(conn):
+    _, (cluster_id,) = new_clusters(conn, 1)
+
+    class NamesItFirst(FakeLLM):
+        def complete(self, model, messages, json_schema):
+            conn.execute("UPDATE clusters SET name = 'Named Meanwhile' WHERE id = %s", (cluster_id,))
+            return super().complete(model, messages, json_schema)
+
+    assert run(conn, NamesItFirst([{"name": "Refund Delays"}])) == NamingResult(skipped=1)
+    assert naming_row(conn, cluster_id)[0] == "Named Meanwhile"
+
+
+def test_a_non_llm_error_stops_the_step_and_keeps_what_was_saved(conn):
+    _, (first, second) = new_clusters(conn, 2)
+    with pytest.raises(ValueError):
+        run(conn, FakeLLM([{"name": "Refund Delays"}, ValueError("bad model name")]))
+    assert naming_row(conn, first)[0] == "Refund Delays"
+    assert naming_row(conn, second)[0] is None                       # tried again next pass
+
+
+def test_two_new_clusters_wanting_one_name_get_it_oldest_first(conn):
+    _, (older, newer) = new_clusters(conn, 2)
+    run(conn, FakeLLM([{"name": "Refund Delays"}, {"name": "Refund Delays"}]))
+    assert [naming_row(conn, c)[0] for c in (older, newer)] == ["Refund Delays", "Refund Delays (2)"]
+
+
+def test_namer_returns_how_many_clusters_it_wrote(conn):
+    new_clusters(conn, 2)
+    namer = Namer(FakeLLM([{"name": "Refund Delays"}, LLMRefused("no")]), "test-model",
+                  growth=2.0, max_renames=10)
+    assert namer(conn) == 2                                           # one LLM name, one fallback
