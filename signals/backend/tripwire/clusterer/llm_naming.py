@@ -12,12 +12,14 @@ The pieces, in call order (one pass of step 4):
   load_input      three reads for one cluster: its Signal, its members (closest to the center
                   first) and the names its sibling clusters already have
   pick_sample     pure: which members the LLM sees (8 closest + 3 farthest, summarized only)
-  ... (build_messages, llm.complete, clean_name, save: next pieces)
+  build_messages  pure: the system prompt (prompts/name_vN.md) + one user message for the cluster
+  ... (llm.complete, clean_name, save: next pieces)
 
 No LLM call happens inside a database transaction: every read ends before the call, and each
 write is its own short transaction that checks nothing changed meanwhile.
 """
 
+import json
 import logging
 import math
 from dataclasses import dataclass
@@ -27,6 +29,7 @@ from fractions import Fraction
 
 from .naming import NAME_CANDIDATES_SQL
 from .sql import leaf_cluster
+from .summarize import PROMPTS, Prompt
 
 log = logging.getLogger("clusterer.naming")
 
@@ -189,3 +192,61 @@ def pick_sample(members):
     closest = summarized[:CLOSEST_MEMBERS]
     farthest = summarized[CLOSEST_MEMBERS:][-FARTHEST_MEMBERS:]
     return closest, farthest
+
+
+# ------------------------------------------------------------------ the prompt
+
+# Like the summarizer's prompts: a change, even one word, is a new file with the next number
+# (prompts/README.md). Names don't record which version wrote them, so try_naming is where
+# versions get compared.
+NAMING_PROMPT_VERSION = 1
+
+
+def naming_prompt_paths(version):
+    return PROMPTS / f"name_v{version}.md", PROMPTS / f"name_v{version}.schema.json"
+
+
+def load_naming_prompt(version=NAMING_PROMPT_VERSION):
+    text_path, schema_path = naming_prompt_paths(version)
+    return Prompt(version, text_path.read_text().strip(), json.loads(schema_path.read_text()))
+
+
+def build_messages(cluster, system_prompt):
+    """The two messages for one cluster: the system prompt, then the cluster as tagged sections.
+    The current name is shown only when it's an LLM name: an old-step or fallback name is one
+    member's sentence, and showing it would anchor the model to exactly what we're replacing."""
+    closest, farthest = pick_sample(cluster.members)
+    shown = len(closest) + len(farthest)
+
+    cluster_lines = [f"size: {cluster.member_count} findings ({shown} shown below)"]
+    job = cluster.job
+    if job.kind == "rename" and job.current_source == "llm":
+        cluster_lines.append(f"current name: {job.current_name}")
+
+    sections = [
+        _section("tripwire_signal", [f"name: {cluster.signal_name}",
+                                     f"instruction: {cluster.instruction}"]),
+        _section("tripwire_cluster", cluster_lines),
+        _section("tripwire_closest_members", _member_lines(closest)),
+    ]
+    if farthest:
+        sections.append(_section("tripwire_farthest_members", _member_lines(farthest)))
+    sections.append(_section("tripwire_other_names",
+                             [f"- {name}" for name in cluster.sibling_names] or ["(none)"]))
+    return [{"role": "system", "content": system_prompt},
+            {"role": "user", "content": "\n\n".join(sections)}]
+
+
+def _section(tag, lines):
+    return f"<{tag}>\n" + "\n".join(lines) + f"\n</{tag}>"
+
+
+def _member_lines(members):
+    """One numbered line per member; its details on the next line ("; " between them, because a
+    detail has a colon of its own)."""
+    lines = []
+    for number, member in enumerate(members, start=1):
+        lines.append(f"{number}. {member.summary}")
+        if member.details:
+            lines.append("   details: " + "; ".join(member.details))
+    return lines

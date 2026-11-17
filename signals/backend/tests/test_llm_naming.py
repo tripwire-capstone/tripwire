@@ -13,10 +13,14 @@ from tests.clustering_data import (
 from tests.vectors import base_vector, vector_at
 from tripwire.clusterer.llm_naming import (
     NAMED_CLUSTERS_SQL,
+    NAMING_PROMPT_VERSION,
+    ClusterInput,
     Job,
     Member,
     NamedCluster,
+    build_messages,
     find_work,
+    load_naming_prompt,
     load_input,
     pick_sample,
     rename_is_due,
@@ -283,3 +287,64 @@ def test_a_cluster_whose_members_are_all_gone_gives_none(conn):
     signal_id, _ = add_signal(conn)
     cluster_id = add_cluster(conn, signal_id, base_vector())
     assert load_input(conn, new_job(cluster_id, signal_id)) is None
+
+
+# ------------------------------------------------------------------ build_messages (pure)
+
+def cluster_input(member_count=3, job=None, siblings=(), details=()):
+    job = job or Job(7, 1, "new", fallback="unused")
+    shown = tuple(Member(i, f"summary {i}", details) for i in range(1, member_count + 1))
+    return ClusterInput(job, "Issues", "Flag mistakes.", member_count, shown, tuple(siblings))
+
+
+def user_message(cluster):
+    system, user = build_messages(cluster, "THE SYSTEM PROMPT")
+    assert system == {"role": "system", "content": "THE SYSTEM PROMPT"}
+    assert user["role"] == "user"
+    return user["content"]
+
+
+def test_the_message_has_the_signal_cluster_members_and_other_names_in_order():
+    text = user_message(cluster_input(siblings=["Older Name"]))
+    assert text == (
+        "<tripwire_signal>\nname: Issues\ninstruction: Flag mistakes.\n</tripwire_signal>\n\n"
+        "<tripwire_cluster>\nsize: 3 findings (3 shown below)\n</tripwire_cluster>\n\n"
+        "<tripwire_closest_members>\n1. summary 1\n2. summary 2\n3. summary 3\n"
+        "</tripwire_closest_members>\n\n"
+        "<tripwire_other_names>\n- Older Name\n</tripwire_other_names>")
+
+
+def test_farthest_members_appear_only_for_clusters_bigger_than_eight():
+    assert "<tripwire_farthest_members>" not in user_message(cluster_input(8))
+    text = user_message(cluster_input(20))
+    assert "size: 20 findings (11 shown below)" in text
+    assert "<tripwire_farthest_members>\n1. summary 18\n2. summary 19\n3. summary 20\n" in text
+
+
+def test_no_other_clusters_says_none():
+    assert "<tripwire_other_names>\n(none)\n</tripwire_other_names>" in user_message(cluster_input())
+
+
+def test_details_go_on_their_own_line_separated_by_semicolons():
+    text = user_message(cluster_input(1, details=("item: sneaker", "tool: create_exchange")))
+    assert "1. summary 1\n   details: item: sneaker; tool: create_exchange\n" in text
+
+
+@pytest.mark.parametrize("job, shown", [
+    (Job(7, 1, "rename", current_name="Wrong Item Shipped", current_source="llm"), True),
+    (Job(7, 1, "rename", current_name="one member's summary", current_source="fallback"), False),
+    (Job(7, 1, "rename", current_name="one member's summary", current_source=None), False),
+    (Job(7, 1, "new", fallback="one member's summary"), False),
+])
+def test_the_current_name_is_shown_only_when_it_is_an_llm_name(job, shown):
+    text = user_message(cluster_input(job=job))
+    assert ("current name: Wrong Item Shipped" in text) is shown
+    assert "one member's summary" not in text
+
+
+def test_the_naming_prompt_files_exist_and_ask_for_just_a_name():
+    prompt = load_naming_prompt()
+    assert prompt.version == NAMING_PROMPT_VERSION
+    assert "Title Case" in prompt.system
+    assert prompt.schema["required"] == ["name"]
+    assert prompt.schema["additionalProperties"] is False
