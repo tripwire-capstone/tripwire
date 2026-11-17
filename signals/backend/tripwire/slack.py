@@ -4,21 +4,16 @@ import json
 import logging
 import os
 from http.client import HTTPException, HTTPSConnection
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 log = logging.getLogger(__name__)
 
 
-def post_slack(text: str, *, record_type: str, record_id: int) -> None:
-    webhook_url = os.getenv("TRIPWIRE_SLACK_WEBHOOK_URL", "").strip()
-    if not webhook_url:
-        return
-
+def parse_slack_webhook_url(value: str) -> SplitResult | None:
     try:
-        url = urlsplit(webhook_url)
+        url = urlsplit(value.strip())
     except ValueError:
-        log.warning("Invalid Slack webhook URL for %s %s", record_type, record_id)
-        return
+        return None
 
     if (
         url.scheme != "https"
@@ -27,8 +22,29 @@ def post_slack(text: str, *, record_type: str, record_id: int) -> None:
         or url.query
         or url.fragment
     ):
+        return None
+
+    return url
+
+
+def post_slack(
+    text: str,
+    *,
+    record_type: str,
+    record_id: int,
+    webhook_url: str | None = None,
+) -> bool:
+    if webhook_url is None:
+        webhook_url = os.getenv("TRIPWIRE_SLACK_WEBHOOK_URL", "")
+
+    webhook_url = webhook_url.strip()
+    if not webhook_url:
+        return False
+
+    url = parse_slack_webhook_url(webhook_url)
+    if url is None:
         log.warning("Invalid Slack webhook URL for %s %s", record_type, record_id)
-        return
+        return False
 
     connection = HTTPSConnection("hooks.slack.com", timeout=2)
     try:
@@ -39,13 +55,14 @@ def post_slack(text: str, *, record_type: str, record_id: int) -> None:
             headers={"Content-Type": "application/json"},
         )
         with connection.getresponse() as response:
-            if response.status != 200:
-                log.warning(
-                    "Slack delivery failed for %s %s (HTTP %s)",
-                    record_type,
-                    record_id,
-                    response.status,
-                )
+            if response.status == 200:
+                return True
+            log.warning(
+                "Slack delivery failed for %s %s (HTTP %s)",
+                record_type,
+                record_id,
+                response.status,
+            )
     except (OSError, HTTPException) as error:
         log.warning(
             "Slack delivery failed for %s %s (%s)",
@@ -55,3 +72,5 @@ def post_slack(text: str, *, record_type: str, record_id: int) -> None:
         )
     finally:
         connection.close()
+
+    return False
