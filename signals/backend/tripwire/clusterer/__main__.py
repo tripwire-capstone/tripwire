@@ -2,7 +2,8 @@
 
 Two modes, chosen by CLUSTERER_MODE (decided Nov 11):
   * real (default since the prepare half landed): steps 1-5 (prepare, assign, group, name,
-    centers) every CLUSTERER_INTERVAL_SECONDS. Needs OPENAI_API_KEY (summarizer + embedder).
+    centers) every CLUSTERER_INTERVAL_SECONDS. Needs OPENAI_API_KEY (summarizer, embedder and,
+    unless NAMING_MODEL=off, cluster naming).
   * placeholder: the skeleton's stand-in, no OpenAI. Gives every new event a fixed embedding and
     links some to the seeded cluster, so data keeps flowing end to end.
 
@@ -25,7 +26,9 @@ from .cluster import cluster_step
 from .health import UnhealthyReporter, check_clustering, record_pass
 from .embed import OpenAIEmbedder
 from .llm_client import OpenAIClient
+from .llm_naming import Namer
 from .loop import open_connection, prepare_stand_in, run_pass
+from .naming import name_new_clusters
 from .prepare import Preparer
 from .settings import SettingsError, load_settings
 
@@ -49,16 +52,29 @@ def placeholder_pass(settings, reporter):
                  embedded, linked, embedded - linked)
 
 
-def real_pass(settings, reporter, prepare=prepare_stand_in):
+def real_pass(settings, reporter, prepare=prepare_stand_in, name=None):
     # A fresh connection each pass, so a dropped connection heals on the next pass.
     with open_connection(settings.database_url) as conn:
-        result = run_pass(conn, settings, prepare=prepare)
+        result = run_pass(conn, settings, prepare=prepare, name=name)
         report_health(conn, settings, reporter)
     if result.anything_happened():
         log.info("clusterer pass: prepared %s, %d joined, %d new clusters, %d named, "
                  "%d centers updated%s", result.prepared or "nothing",
                  result.joined, result.created, result.named, result.centers_updated,
                  f"; failed steps: {', '.join(result.failed_steps)}" if result.failed_steps else "")
+
+
+def naming_step(settings, llm):
+    """Step 4: LLM names (llm_naming.Namer, SIG-65), or naming.py's closest-member summary
+    when NAMING_MODEL=off."""
+    if settings.naming_model is None:
+        log.info("cluster naming: off (NAMING_MODEL=off): clusters get their closest member's summary")
+        return name_new_clusters
+    log.info("cluster naming: %s, renamed at %gx growth, at most %d renames per pass",
+             settings.naming_model, settings.naming_rename_growth,
+             settings.naming_max_renames_per_pass)
+    return Namer(llm, settings.naming_model, settings.naming_rename_growth,
+                 settings.naming_max_renames_per_pass)
 
 
 def tick(one_pass, settings, reporter):
@@ -85,13 +101,15 @@ def main():
     log.info("clusterer starting in %s mode (threshold %.2f, every %gs)",
              settings.mode, settings.assign_threshold, settings.interval_seconds)
     if settings.mode == "real":
-        # Built once: it keeps the OpenAI clients and its skip list between passes (Q21).
-        preparer = Preparer(OpenAIClient(settings.openai_api_key),
-                            OpenAIEmbedder(settings.openai_api_key),
+        # Built once: they keep the OpenAI clients (and the preparer its skip list) between
+        # passes (Q21). The summarizer and the namer share one client.
+        llm = OpenAIClient(settings.openai_api_key)
+        preparer = Preparer(llm, OpenAIEmbedder(settings.openai_api_key),
                             settings.summarizer_model, settings.summarizer_prompt_version)
+        name = naming_step(settings, llm)
 
         def one_pass(settings_used, reporter_used):
-            real_pass(settings_used, reporter_used, prepare=preparer.prepare_events)
+            real_pass(settings_used, reporter_used, prepare=preparer.prepare_events, name=name)
     else:
         one_pass = placeholder_pass
     reporter = UnhealthyReporter()
