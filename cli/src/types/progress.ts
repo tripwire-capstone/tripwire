@@ -19,6 +19,9 @@ export interface GroupDef {
   name: string;
   // Resource types; a trailing * matches a prefix (aws_cognito_* → every Cognito type)
   types: string[];
+  // Resource names (the part after the type) that belong here whatever their type, checked
+  // before `types`: "tripwire" puts aws_ecs_service.tripwire["api"] under Tripwire, not Laminar
+  names?: string[];
   // Shown next to the group while it runs
   notes?: Partial<Record<ProgressAction, string>>;
 }

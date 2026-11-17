@@ -1,5 +1,7 @@
 # What the Tripwire backend needs from the infrastructure
 
+*Rules for teammates once the backend runs on AWS: `TRIPWIRE_ON_AWS_RULES.md` (same folder).*
+
 *Started Nov 11, 2026 by the Clusters pair. For whoever adds the Tripwire backend services (poller, runner,
 clusterer, api in `signals/backend/`) to this Terraform. Today `stack/` deploys Laminar only; none of the
 backend services has an ECS task definition yet. Add to this file whenever backend work creates a new
@@ -128,3 +130,17 @@ container) connects through `DATABASE_URL`. Locally that's the compose `db` cont
 | 3 | Settings as env vars; Terraform validation matches `settings.py` | clusterer | Yes | Clusters PR 4 |
 | 4 | `OPENAI_API_KEY` from Secrets Manager; outbound HTTPS to OpenAI | clusterer | Yes | Clusters PR 3+4 |
 | 5 | `DATABASE_URL` to RDS, password from Secrets Manager, pgvector | all backend services | Yes | now |
+
+## Status (Nov 16, 2026: branch `tripwire-on-aws`)
+
+All five items are in `infra/stack/tripwire.tf`:
+
+| # | Where | Notes |
+|---|---|---|
+| 1 | `aws_ecs_task_definition.tripwire["clusterer"]` | `--alive`, same timing as `compose.yaml` |
+| 2 | `aws_cloudwatch_log_metric_filter.clustering_unhealthy` + alarm | Matches `clustering unhealthy:`, ≥ 1 in 10 minutes, to `aws_sns_topic.alerts` |
+| 3 | `local.tripwire_services` / `tripwire_common_env` | Defaults from `settings.py`; nothing exposed as a Terraform variable yet, so no validation ranges to keep in step |
+| 4 | SSM `/<name>/tripwire/openai_api_key` | Written by the CLI (`tripwire deploy` asks for it), referenced by ARN so it never enters Terraform state. SSM SecureString rather than Secrets Manager, like Laminar's other secrets. Shared by the runner (judge) and the clusterer |
+| 5 | `aws_ssm_parameter.tripwire_database_url` | **Open question answered:** Tripwire gets its own `tripwire` database and user on Laminar's existing RDS instance (not its own instance). The migration task (`tripwire/migrate.py`) creates them as the master user; the services connect as `tripwire` |
+
+Rules for teammates now that the backend runs on AWS: `TRIPWIRE_ON_AWS_RULES.md`.

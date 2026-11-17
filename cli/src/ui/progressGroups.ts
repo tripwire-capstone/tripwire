@@ -26,13 +26,15 @@ export const GROUPS: GroupDef[] = [
     types: ["aws_lb", "aws_lb_listener", "aws_lb_listener_rule", "aws_lb_target_group", "aws_route53_record"],
   },
   { name: "Login page", types: ["aws_cognito_*"] },
+  // Everything in infra/stack/tripwire.tf is named tripwire or tripwire_*
+  { name: "Tripwire", types: [], names: ["tripwire*", "clustering_unhealthy"] },
   {
     name: "Laminar app",
     types: ["aws_ecs_*", "aws_service_discovery_*", "aws_cloudwatch_log_group"],
   },
   {
     name: "Backups and alerts",
-    types: ["aws_dlm_lifecycle_policy", "aws_cloudwatch_metric_alarm", "aws_sns_*"],
+    types: ["aws_dlm_lifecycle_policy", "aws_cloudwatch_metric_alarm", "aws_cloudwatch_log_metric_filter", "aws_sns_*"],
   },
 ];
 
@@ -77,9 +79,18 @@ function matches(pattern: string, resourceType: string): boolean {
   return pattern.endsWith("*") ? resourceType.startsWith(pattern.slice(0, -1)) : pattern === resourceType;
 }
 
-// The group a resource type is shown under; undefined for no-line and unknown types
-export function groupFor(resourceType: string, stack: StackName = "stack"): GroupDef | undefined {
-  return GROUPS_BY_STACK[stack].groups.find((group) => group.types.some((pattern) => matches(pattern, resourceType)));
+// aws_ecs_service.tripwire["api"] → tripwire
+const resourceName = (address: string): string => address.split(".")[1]?.split("[")[0] ?? "";
+
+// The group a resource is shown under: by name first (see GroupDef.names), then by type;
+// undefined for no-line and unknown types
+export function groupFor(resourceType: string, stack: StackName = "stack", address?: string): GroupDef | undefined {
+  const groups = GROUPS_BY_STACK[stack].groups;
+  const name = address ? resourceName(address) : "";
+  const byName = name
+    ? groups.find((group) => group.names?.some((pattern) => matches(pattern, name)))
+    : undefined;
+  return byName ?? groups.find((group) => group.types.some((pattern) => matches(pattern, resourceType)));
 }
 
 export function isNoLine(resourceType: string, stack: StackName = "stack"): boolean {
@@ -111,7 +122,7 @@ export function startProgress(
     activeMs: 0,
   }));
   for (const change of realChanges(plan)) {
-    const def = groupFor(change.type, stack);
+    const def = groupFor(change.type, stack, change.address);
     if (def) groups[defs.indexOf(def)].expected.add(change.address);
   }
   return { action, startedAt: now, groups: groups.filter((group) => group.expected.size > 0) };

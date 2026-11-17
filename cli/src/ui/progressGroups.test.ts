@@ -205,3 +205,19 @@ test("groupSeconds counts only time spent working, not waiting", () => {
   applyEvent(progress, hook("apply_complete", "aws_ecs_service.frontend"), 462_000);
   assert.equal(groupSeconds(app, 500_000), 3, "2 s, then a 7-minute wait, then 1 s");
 });
+
+test("groupFor puts Tripwire's resources under Tripwire, whatever their type", () => {
+  assert.equal(groupFor("aws_ecs_service", "stack", 'aws_ecs_service.tripwire["api"]')?.name, "Tripwire");
+  assert.equal(groupFor("aws_lb_listener_rule", "stack", "aws_lb_listener_rule.tripwire")?.name, "Tripwire");
+  assert.equal(groupFor("aws_ssm_parameter", "stack", "aws_ssm_parameter.tripwire_database_url")?.name, "Tripwire");
+  assert.equal(
+    groupFor("aws_cloudwatch_log_metric_filter", "stack", "aws_cloudwatch_log_metric_filter.clustering_unhealthy")?.name,
+    "Tripwire",
+  );
+});
+
+test("groupFor keeps Laminar's resources where they were", () => {
+  assert.equal(groupFor("aws_ecs_service", "stack", "aws_ecs_service.frontend")?.name, "Laminar app");
+  assert.equal(groupFor("aws_lb_listener_rule", "stack", "aws_lb_listener_rule.api")?.name, "Load balancer");
+  assert.equal(groupFor("aws_ecs_service")?.name, "Laminar app");
+});

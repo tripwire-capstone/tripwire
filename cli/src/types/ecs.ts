@@ -34,3 +34,13 @@ export interface ServiceProgress {
   failed: boolean;
   retried: boolean;
 }
+
+// One product's ECS services, for waiting on them and showing their rows (aws/ecs.ts)
+export interface ServiceSet {
+  // What a user sees: "Starting <product>"
+  product: string;
+  services: string[];
+  // Row name per service
+  names: Record<string, string>;
+  logGroup: string;
+}
