@@ -21,3 +21,6 @@ override.tf.json
 *_override.tf.json
 # Working notes, kept local for now
 /docs/
+
+# Personal Claude Code instructions; not shared
+CLAUDE.local.md
