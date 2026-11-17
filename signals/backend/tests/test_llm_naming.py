@@ -28,6 +28,7 @@ from tripwire.clusterer.llm_naming import (
     load_naming_prompt,
     load_input,
     pick_sample,
+    save,
     rename_is_due,
     renames_due,
 )
@@ -412,3 +413,112 @@ def test_ask_llm_passes_llm_errors_and_other_errors_through():
     for error in (LLMServiceError("down"), ValueError("a bug")):
         with pytest.raises(type(error)):
             ask_llm(FakeLLM([error]), "test-model", cluster_input(), load_naming_prompt())
+
+
+# ------------------------------------------------------------------ save (database)
+
+def naming_row(conn, cluster_id):
+    return conn.execute(
+        """SELECT name, name_source, named_at, named_member_count FROM clusters WHERE id = %s""",
+        (cluster_id,)).fetchone()
+
+
+def unnamed_cluster(conn, signal_id):
+    return add_cluster(conn, signal_id, base_vector())
+
+
+def named_cluster(conn, signal_id, name, source=None, count=None):
+    cluster_id = add_cluster(conn, signal_id, base_vector())
+    conn.execute(
+        """UPDATE clusters SET name = %s, name_source = %s, named_member_count = %s,
+               named_at = CASE WHEN %s::text IS NULL THEN NULL ELSE now() END
+           WHERE id = %s""", (name, source, count, source, cluster_id))
+    return cluster_id
+
+
+def rename_job(conn, cluster_id, signal_id):
+    """A rename Job as find_work would build it from the cluster as it is now."""
+    name, source, named_at, _ = naming_row(conn, cluster_id)
+    return Job(cluster_id, signal_id, "rename", current_name=name, current_source=source,
+               named_at=named_at)
+
+
+def test_save_names_a_new_cluster_with_its_whole_naming_record(conn):
+    signal_id, _ = add_signal(conn)
+    cluster_id = unnamed_cluster(conn, signal_id)
+    assert save(conn, Job(cluster_id, signal_id, "new"), "Refund Delays", "llm", 5) == "Refund Delays"
+    name, source, named_at, count = naming_row(conn, cluster_id)
+    assert (name, source, named_at is not None, count) == ("Refund Delays", "llm", True, 5)
+
+
+def test_save_writes_a_fallback_name_the_same_way(conn):
+    signal_id, _ = add_signal(conn)
+    cluster_id = unnamed_cluster(conn, signal_id)
+    save(conn, Job(cluster_id, signal_id, "new"), "The user asks for a refund, in returns.", "fallback", 3)
+    assert naming_row(conn, cluster_id)[1] == "fallback"
+
+
+def test_save_never_overwrites_a_new_cluster_named_meanwhile(conn):
+    signal_id, _ = add_signal(conn)
+    cluster_id = unnamed_cluster(conn, signal_id)
+    job = Job(cluster_id, signal_id, "new")                       # read while still unnamed
+    conn.execute("UPDATE clusters SET name = 'Named Meanwhile' WHERE id = %s", (cluster_id,))
+    assert save(conn, job, "Refund Delays", "llm", 5) is None
+    assert naming_row(conn, cluster_id) == ("Named Meanwhile", None, None, None)
+
+
+def test_save_renames_an_llm_name_and_an_old_step_name(conn):
+    signal_id, _ = add_signal(conn)
+    llm_named = named_cluster(conn, signal_id, "Refund Delays", "llm", 4)
+    old_step = named_cluster(conn, signal_id, "The user asks for a refund, in returns.")
+    for cluster_id in (llm_named, old_step):
+        job = rename_job(conn, cluster_id, signal_id)
+        assert save(conn, job, f"Renamed {cluster_id}", "llm", 8) == f"Renamed {cluster_id}"
+        assert naming_row(conn, cluster_id)[::3] == (f"Renamed {cluster_id}", 8)
+
+
+def test_save_skips_a_rename_if_the_cluster_was_renamed_meanwhile(conn):
+    signal_id, _ = add_signal(conn)
+    cluster_id = named_cluster(conn, signal_id, "Refund Delays", "llm", 4)
+    job = rename_job(conn, cluster_id, signal_id)
+    conn.execute("UPDATE clusters SET named_at = named_at + interval '1 second' WHERE id = %s",
+                 (cluster_id,))                                    # renamed to the same name
+    assert save(conn, job, "Refund And Return Delays", "llm", 8) is None
+    assert naming_row(conn, cluster_id)[0] == "Refund Delays"
+
+
+def test_save_skips_a_rename_of_an_old_step_name_changed_meanwhile(conn):
+    # named_at is NULL before and after an old-step write: only the name shows the change.
+    signal_id, _ = add_signal(conn)
+    cluster_id = named_cluster(conn, signal_id, "First old-step sentence.")
+    job = rename_job(conn, cluster_id, signal_id)
+    conn.execute("UPDATE clusters SET name = 'Second old-step sentence.' WHERE id = %s", (cluster_id,))
+    assert save(conn, job, "Refund Delays", "llm", 8) is None
+    assert naming_row(conn, cluster_id)[0] == "Second old-step sentence."
+
+
+def test_save_numbers_a_name_another_cluster_of_the_signal_already_has(conn):
+    signal_id, _ = add_signal(conn)
+    other_signal, _ = add_signal(conn, name="Signal B")
+    named_cluster(conn, signal_id, "Refund Delays", "llm", 4)
+    named_cluster(conn, signal_id, "Refund Delays (2)", "llm", 4)
+    named_cluster(conn, other_signal, "Wrong Size", "llm", 4)       # another Signal: no clash
+    first, second = unnamed_cluster(conn, signal_id), unnamed_cluster(conn, signal_id)
+    assert save(conn, Job(first, signal_id, "new"), "Refund Delays", "llm", 3) == "Refund Delays (3)"
+    assert save(conn, Job(second, signal_id, "new"), "Wrong Size", "llm", 3) == "Wrong Size"
+
+
+def test_save_checks_names_given_after_the_model_was_asked(conn):
+    signal_id, _ = add_signal(conn)
+    first, second = unnamed_cluster(conn, signal_id), unnamed_cluster(conn, signal_id)
+    second_job = Job(second, signal_id, "new")                     # read before `first` is named
+    save(conn, Job(first, signal_id, "new"), "Refund Delays", "llm", 3)
+    assert save(conn, second_job, "Refund Delays", "llm", 3) == "Refund Delays (2)"
+
+
+def test_a_rename_that_keeps_the_name_gets_no_number(conn):
+    signal_id, _ = add_signal(conn)
+    cluster_id = named_cluster(conn, signal_id, "Refund Delays", "llm", 4)
+    job = rename_job(conn, cluster_id, signal_id)
+    assert save(conn, job, "Refund Delays", "llm", 8) == "Refund Delays"
+    assert naming_row(conn, cluster_id)[::3] == ("Refund Delays", 8)

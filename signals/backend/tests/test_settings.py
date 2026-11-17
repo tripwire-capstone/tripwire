@@ -136,3 +136,31 @@ def test_placeholder_mode_runs_without_an_openai_key():
 
 def test_the_openai_key_is_never_printed():
     assert "test-key" not in repr(load_settings(BASE))
+
+
+def test_naming_defaults():
+    settings = load_settings(BASE)
+    assert settings.naming_model == "gpt-6.1-sol"
+    assert (settings.naming_rename_growth, settings.naming_max_renames_per_pass) == (2.0, 10)
+
+
+def test_naming_model_off_turns_llm_naming_off_in_any_case():
+    for value in ("off", "OFF", " Off "):
+        assert settings_with(NAMING_MODEL=value).naming_model is None
+
+
+def test_naming_model_reads_any_other_model_name():
+    assert settings_with(NAMING_MODEL="gpt-6-astra").naming_model == "gpt-6-astra"
+
+
+def test_rename_growth_must_be_more_than_one():
+    # 1 would rename every cluster on every pass.
+    for value in (1, 0.5, 0):
+        assert "NAMING_RENAME_GROWTH must be more than 1" in problem_with(NAMING_RENAME_GROWTH=value)
+    assert settings_with(NAMING_RENAME_GROWTH=1.01).naming_rename_growth == 1.01
+
+
+def test_max_renames_per_pass_may_be_zero_but_not_negative():
+    assert settings_with(NAMING_MAX_RENAMES_PER_PASS=0).naming_max_renames_per_pass == 0
+    assert "NAMING_MAX_RENAMES_PER_PASS must be 0 (no renames) or more, got -1" in problem_with(
+        NAMING_MAX_RENAMES_PER_PASS=-1)

@@ -15,7 +15,9 @@ The pieces, in call order (one pass of step 4):
   build_messages  pure: the system prompt (prompts/name_vN.md) + one user message for the cluster
   ask_llm         one paid call (llm_client.py) for one cluster, then clean_name (pure): the
                   name as stored, or LLMBadOutput if it isn't usable
-  ... (save, name_clusters: next pieces)
+  save            one short transaction: re-checks the Signal's names for duplicates, then writes
+                  the name only if nobody changed the cluster's name since it was read
+  ... (name_clusters: next piece)
 
 No LLM call happens inside a database transaction: every read ends before the call, and each
 write is its own short transaction that checks nothing changed meanwhile.
@@ -29,7 +31,7 @@ from datetime import datetime
 from decimal import Decimal
 from fractions import Fraction
 
-from .naming import NAME_CANDIDATES_SQL
+from .naming import NAME_CANDIDATES_SQL, unique_name
 from .sql import leaf_cluster
 from ..llm import LLMBadOutput
 from .summarize import PROMPTS, Prompt
@@ -288,3 +290,47 @@ def ask_llm(llm, model, cluster, prompt):
         return clean_name(result.output), result.usage
     except LLMBadOutput as error:
         raise LLMBadOutput(str(error), usage=result.usage) from error
+
+
+# ------------------------------------------------------------------ save
+
+# A new cluster is written only if it's still unnamed; a rename only if its name and named_at
+# are still what find_work read (named_at alone can't tell for an old-step name: it's NULL
+# before and after an old-step write). 0 rows = someone else named it first: skipped, not
+# overwritten.
+NAME_NEW_SQL = """
+UPDATE clusters
+SET name = %(name)s, name_source = %(source)s, named_at = now(),
+    named_member_count = %(count)s, updated_at = now()
+WHERE id = %(cluster_id)s AND name IS NULL
+"""
+
+RENAME_SQL = """
+UPDATE clusters
+SET name = %(name)s, name_source = %(source)s, named_at = now(),
+    named_member_count = %(count)s, updated_at = now()
+WHERE id = %(cluster_id)s
+  AND name IS NOT DISTINCT FROM %(old_name)s
+  AND named_at IS NOT DISTINCT FROM %(old_named_at)s
+"""
+
+
+def save(conn, job, name, source, member_count):
+    """Write one cluster's name. Returns the name as stored (with "(2)" etc. if another
+    cluster of the Signal has it), or None if the cluster was named by someone else since it
+    was read. `member_count` is the size the name describes: counted when the input was read,
+    not now (members may have joined during the call; the next doubling is measured from it)."""
+    with conn.transaction():
+        # Re-read now, not the names the model saw: other clusters may have been named since.
+        # The cluster's own current name isn't among them, so keeping a name never adds "(2)".
+        taken = {sibling for (sibling,) in
+                 conn.execute(SIBLING_NAMES_SQL, (job.signal_id, job.cluster_id)).fetchall()}
+        stored = unique_name(name, taken)
+        values = {"name": stored, "source": source, "count": member_count,
+                  "cluster_id": job.cluster_id, "old_name": job.current_name,
+                  "old_named_at": job.named_at}
+        written = conn.execute(NAME_NEW_SQL if job.kind == "new" else RENAME_SQL, values).rowcount
+    if written == 0:
+        log.info("cluster %s was named by someone else meanwhile; left as it is", job.cluster_id)
+        return None
+    return stored
