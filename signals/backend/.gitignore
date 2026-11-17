@@ -6,3 +6,5 @@ __pycache__/
 .pytest_cache/
 # try_prompts output (may hold trace text)
 try_prompts_*/
+# try_naming output (holds event summaries)
+try_naming_*/
