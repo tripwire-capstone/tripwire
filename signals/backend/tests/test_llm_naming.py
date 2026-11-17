@@ -2,6 +2,9 @@
 
 import pytest
 
+from tripwire.clusterer.llm_client import FakeLLM
+from tripwire.llm import LLMBadOutput, LLMServiceError
+
 from tests.clustering_data import (
     add_cluster,
     add_event,
@@ -18,7 +21,9 @@ from tripwire.clusterer.llm_naming import (
     Job,
     Member,
     NamedCluster,
+    ask_llm,
     build_messages,
+    clean_name,
     find_work,
     load_naming_prompt,
     load_input,
@@ -348,3 +353,62 @@ def test_the_naming_prompt_files_exist_and_ask_for_just_a_name():
     assert "Title Case" in prompt.system
     assert prompt.schema["required"] == ["name"]
     assert prompt.schema["additionalProperties"] is False
+
+
+# ------------------------------------------------------------------ clean_name, ask_llm (pure)
+
+@pytest.mark.parametrize("raw, cleaned", [
+    ("Delivery Date Change Requests", "Delivery Date Change Requests"),
+    ("  Delivery Date   Change\nRequests  ", "Delivery Date Change Requests"),
+    ('"Delivery Date Change Requests"', "Delivery Date Change Requests"),
+    ("\u201cDelivery Date Change Requests.\u201d", "Delivery Date Change Requests"),
+    ("Delivery Date Change Requests.", "Delivery Date Change Requests"),
+    ("U.S. Address Errors", "U.S. Address Errors"),          # inner periods are kept
+    ("Can't Find Order Status", "Can't Find Order Status"),  # inner apostrophes are kept
+])
+def test_clean_name_tidies_only_what_surrounds_the_name(raw, cleaned):
+    assert clean_name({"name": raw}) == cleaned
+
+
+@pytest.mark.parametrize("output", [
+    {"name": ""}, {"name": "   "}, {"name": '"."'}, {"name": None}, {}, "not a dict",
+])
+def test_clean_name_rejects_an_answer_with_no_usable_name(output):
+    with pytest.raises(LLMBadOutput):
+        clean_name(output)
+
+
+def test_clean_name_allows_twelve_words_but_not_thirteen():
+    assert clean_name({"name": " ".join(["Word"] * 12)})
+    with pytest.raises(LLMBadOutput, match="13 words"):
+        clean_name({"name": " ".join(["Word"] * 13)})
+
+
+def test_clean_name_allows_eighty_characters_but_not_eighty_one():
+    assert clean_name({"name": "x" * 80})
+    with pytest.raises(LLMBadOutput, match="81 characters"):
+        clean_name({"name": "x" * 81})
+
+
+def test_ask_llm_sends_the_prompt_and_returns_the_cleaned_name_and_usage():
+    llm = FakeLLM([{"name": " Delivery Date Change Requests. "}])
+    prompt = load_naming_prompt()
+    name, usage = ask_llm(llm, "test-model", cluster_input(), prompt)
+    assert (name, usage) == ("Delivery Date Change Requests", llm.usage)
+    [request] = llm.requests
+    assert request["model"] == "test-model"
+    assert request["json_schema"] == prompt.schema
+    assert request["messages"] == build_messages(cluster_input(), prompt.system)
+
+
+def test_ask_llm_reports_an_unusable_name_as_bad_output_with_its_usage():
+    llm = FakeLLM([{"name": ""}])
+    with pytest.raises(LLMBadOutput) as raised:
+        ask_llm(llm, "test-model", cluster_input(), load_naming_prompt())
+    assert raised.value.usage == llm.usage          # the call was paid for: keep its cost
+
+
+def test_ask_llm_passes_llm_errors_and_other_errors_through():
+    for error in (LLMServiceError("down"), ValueError("a bug")):
+        with pytest.raises(type(error)):
+            ask_llm(FakeLLM([error]), "test-model", cluster_input(), load_naming_prompt())

@@ -13,7 +13,9 @@ The pieces, in call order (one pass of step 4):
                   first) and the names its sibling clusters already have
   pick_sample     pure: which members the LLM sees (8 closest + 3 farthest, summarized only)
   build_messages  pure: the system prompt (prompts/name_vN.md) + one user message for the cluster
-  ... (llm.complete, clean_name, save: next pieces)
+  ask_llm         one paid call (llm_client.py) for one cluster, then clean_name (pure): the
+                  name as stored, or LLMBadOutput if it isn't usable
+  ... (save, name_clusters: next pieces)
 
 No LLM call happens inside a database transaction: every read ends before the call, and each
 write is its own short transaction that checks nothing changed meanwhile.
@@ -29,6 +31,7 @@ from fractions import Fraction
 
 from .naming import NAME_CANDIDATES_SQL
 from .sql import leaf_cluster
+from ..llm import LLMBadOutput
 from .summarize import PROMPTS, Prompt
 
 log = logging.getLogger("clusterer.naming")
@@ -250,3 +253,38 @@ def _member_lines(members):
         if member.details:
             lines.append("   details: " + "; ".join(member.details))
     return lines
+
+
+# ------------------------------------------------------------------ the call and the answer
+
+MAX_NAME_WORDS = 12   # the prompt asks for 3-8; a 9-word name that's otherwise fine is kept
+MAX_NAME_CHARS = 80   # a name is a list label, not a sentence
+QUOTES = "\"'\u201c\u201d\u2018\u2019`"   # straight, curly and back quotes
+
+
+def clean_name(output):
+    """The model's answer -> the name to store. Raises LLMBadOutput when it isn't usable: the
+    caller then treats it like any other bad answer (fallback for a new cluster, keep the name
+    for a rename). Tidies only what a model adds around a name; never changes its words."""
+    raw = output.get("name") if isinstance(output, dict) else None
+    if not isinstance(raw, str):
+        raise LLMBadOutput(f"answer has no name: {output!r}")
+    name = " ".join(raw.split())          # trims, and turns newlines and runs of spaces into one
+    name = name.strip(QUOTES).strip()
+    name = name.rstrip(".").strip()
+    if not name:
+        raise LLMBadOutput(f"name is empty: {raw!r}")
+    if len(name.split()) > MAX_NAME_WORDS or len(name) > MAX_NAME_CHARS:
+        raise LLMBadOutput(f"name is too long ({len(name.split())} words, {len(name)} characters): "
+                           f"{name!r}")
+    return name
+
+
+def ask_llm(llm, model, cluster, prompt):
+    """One paid call: (name, usage). Raises any LLMError (llm_client.py's four, or LLMBadOutput
+    from clean_name); anything else (a wrong key, a bad model name, a bug) raises as it is."""
+    result = llm.complete(model, build_messages(cluster, prompt.system), prompt.schema)
+    try:
+        return clean_name(result.output), result.usage
+    except LLMBadOutput as error:
+        raise LLMBadOutput(str(error), usage=result.usage) from error
