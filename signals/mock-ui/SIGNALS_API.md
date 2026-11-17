@@ -10,7 +10,7 @@ Every page reads and writes real data from the Tripwire API. There is no fake da
 | Signal page → Runs | Runs with status, attempts, model, cost, error; status / source / outcome / search filters; chart of finished runs; paging | |
 | Signal page → Settings | Edit the definition, turn on/off | Versions, Alerts, Backfill tabs |
 | New signal | Create, and **Test on a trace** (judges one stored trace, saves nothing) | Templates, sampling, span trigger, most filters |
-| Settings | Laminar and OpenAI API keys: hint, where each comes from, set (checked first) and remove (`GET/PUT/DELETE /api/settings`). The layout reads the same settings for the "not connected yet" banner and shares them with the page (`useOutletContext`) | Notifications (Slack) |
+| Settings | Laminar and OpenAI API keys: hint, where each comes from, set (checked first) and remove (`GET/PUT/DELETE /api/settings`). The layout reads the same settings for the "not connected yet" banner and shares them with the page (`useOutletContext`). Slack: connect a webhook (a connect message is posted first; saved only if Slack accepts), status and alert counts, disconnect (`GET/PUT/DELETE /api/settings/slack`, `useSlack`) | |
 
 Everything hidden is behind a flag in `src/api/features.js`. `HIDDEN_CONTROLS.md` lists each one and
 what has to exist before it comes back.

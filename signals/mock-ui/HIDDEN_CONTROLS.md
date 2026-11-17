@@ -20,4 +20,4 @@ row here, all in the same PR.
 | `backfill` | Backfill button; Settings → Backfill | Backfill isn't built | Backfill jobs exist |
 | `versionsTab` | Settings → Versions | No versions endpoint | `GET /api/signals/{id}/versions` |
 | `alertsTab` | Settings → Alerts | Alerts aren't built | Alerts exist |
-| `notifications` | Notifications page, its sidebar link and the header bell; Settings → Notifications (the Slack webhook) | Alerts aren't built; the page ran on fake data and was removed (Nov 12; it's in git history before branch `ui-clusters-home`) | Alerts exist and an endpoint lists them |
+| `notifications` | Notifications page, its sidebar link and the header bell | Slack alerts exist, but no endpoint lists them; the page ran on fake data and was removed (Nov 12; it's in git history before branch `ui-clusters-home`) | An endpoint lists alerts |
