@@ -1,5 +1,6 @@
 """Slack setup + demo rows end to end: connect, add demo rows, the notifier sends each once."""
 
+import json
 from threading import Event
 
 import pytest
@@ -11,6 +12,10 @@ from tripwire.slack_demo import add_cluster, add_critical_run
 from tripwire.slack_setup import find_project
 
 WEBHOOK = "https://hooks.slack.com/services/T000/B000/XXXX"
+SCHEMA = [
+    {"name": "reason", "type": "string", "description": "Why the user seems frustrated"},
+    {"name": "severity", "type": "enum", "choices": ["low", "medium", "high"]},
+]
 
 
 @pytest.fixture
@@ -22,8 +27,8 @@ def project(conn):
     ).fetchone()
     conn.execute(
         """INSERT INTO signal_versions (signal_id, version_number, instruction, output_schema, model)
-           VALUES (%s, 1, 'Flag frustration', '[]', 'gpt-6-luna')""",
-        (signal_id,),
+           VALUES (%s, 1, 'Flag frustration', %s, 'gpt-6-luna')""",
+        (signal_id, json.dumps(SCHEMA)),
     )
     return project_id
 
@@ -53,8 +58,42 @@ def test_demo_rows_are_sent_once_after_connecting(conn, project, sent):
 
     assert [(kind, url) for kind, _, url in sent] == [("critical_run", WEBHOOK), ("new_cluster", WEBHOOK)]
     assert "1 critical event" in sent[0][1]
-    assert "Demo: users repeating themselves" in sent[1][1]
+    assert "The user repeats their email" in sent[1][1]
+    assert "3 events" in sent[1][1]
     assert get_slack_status(conn, project)["verified_at"] is not None
+
+
+def test_demo_rows_have_the_real_pipelines_shape(conn, project):
+    add_critical_run(conn, project)
+    add_cluster(conn, project)
+
+    events = conn.execute(
+        """SELECT e.severity, e.payload, e.span_ids, e.evidence_labels, e.judge_input,
+                  r.analysis, r.raw_output, t.session_id
+           FROM signal_events e JOIN signal_runs r ON r.id = e.run_id JOIN traces t ON t.id = e.trace_id
+           ORDER BY e.id"""
+    ).fetchall()
+    assert [e[0] for e in events] == ["critical", "warning", "warning", "warning"]
+    for severity, payload, span_ids, labels, judge_input, analysis, raw_output, _ in events:
+        assert set(payload) == {"reason", "severity"}
+        assert payload["severity"] == ("high" if severity == "critical" else "medium")
+        assert len(span_ids) == len(labels) and labels
+        assert all(f"[{label}]" in judge_input for label in labels)
+        assert "<current_turn>" in judge_input and "<earlier_turns" in judge_input
+        assert json.loads(raw_output)["findings"][0]["fields"] == payload
+        assert analysis
+    assert len({e[7] for e in events[1:]}) == 2  # the cluster spans two sessions
+
+    (name, summaries) = conn.execute(
+        """SELECT c.name, count(s.event_id) FILTER (WHERE s.status = 'done')
+           FROM clusters c JOIN cluster_members m ON m.cluster_id = c.id
+           JOIN event_summaries s ON s.event_id = m.event_id GROUP BY c.name"""
+    ).fetchone()
+    assert summaries == 3
+    assert name.startswith("The user repeats their email")
+
+    add_cluster(conn, project)  # a second demo cluster gets a numbered name, like the clusterer's
+    assert conn.execute("SELECT max(name) FROM clusters").fetchone()[0].endswith("(2)")
 
 
 def test_nothing_is_sent_after_disconnecting(conn, project, sent):
