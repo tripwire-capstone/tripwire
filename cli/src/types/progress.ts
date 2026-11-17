@@ -22,6 +22,8 @@ export interface GroupDef {
   // Resource names (the part after the type) that belong here whatever their type, checked
   // before `types`: "tripwire" puts aws_ecs_service.tripwire["api"] under Tripwire, not Laminar
   names?: string[];
+  // Shown next to the group while it waits on other groups (e.g. the network waits for the database)
+  waitNotes?: Partial<Record<ProgressAction, string>>;
   // Shown next to the group while it runs
   notes?: Partial<Record<ProgressAction, string>>;
 }
@@ -34,6 +36,8 @@ export interface GroupTable {
 export interface GroupProgress {
   name: string;
   note?: string;
+  // Why it isn't running yet (GroupDef.waitNotes); plain "waiting" when unset
+  waitNote?: string;
   expected: Set<string>;
   running: Set<string>;
   completed: Set<string>;

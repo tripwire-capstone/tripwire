@@ -251,6 +251,10 @@ resource "aws_lb_target_group" "tripwire" {
   target_type = "ip"
   vpc_id      = aws_vpc.main.id
 
+  # Same as Laminar's target groups (alb.tf). The default 300 s made every deploy and destroy wait
+  # five minutes for an API that only serves a few users' short requests.
+  deregistration_delay = 30
+
   # Also checks the database (the endpoint runs SELECT 1)
   health_check {
     path    = "/tripwire/api/health"

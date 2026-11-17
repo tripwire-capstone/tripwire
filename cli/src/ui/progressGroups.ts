@@ -5,6 +5,8 @@ import type { Plan, StackName, TerraformEvent } from "../types/terraform.js";
 export const GROUPS: GroupDef[] = [
   {
     name: "Network",
+    // Subnets and security groups can only go once the database and data server have left them
+    waitNotes: { remove: "waiting for the database" },
     types: [
       "aws_vpc", "aws_subnet", "aws_internet_gateway", "aws_nat_gateway", "aws_eip",
       "aws_route_table", "aws_route", "aws_route_table_association", "aws_vpc_endpoint",
@@ -27,15 +29,35 @@ export const GROUPS: GroupDef[] = [
   },
   { name: "Login page", types: ["aws_cognito_*"] },
   // Everything in infra/stack/tripwire.tf is named tripwire or tripwire_*
-  { name: "Tripwire", types: [], names: ["tripwire*", "clustering_unhealthy"] },
+  {
+    name: "Tripwire app",
+    types: [],
+    names: ["tripwire*", "clustering_unhealthy"],
+    // The load balancer lets open requests finish before a task is removed (deregistration delay)
+    notes: { remove: "letting open connections finish" },
+  },
   {
     name: "Laminar app",
     types: ["aws_ecs_*", "aws_service_discovery_*", "aws_cloudwatch_log_group"],
+    notes: { remove: "letting open connections finish" },
   },
   {
     name: "Backups and alerts",
     types: ["aws_dlm_lifecycle_policy", "aws_cloudwatch_metric_alarm", "aws_cloudwatch_log_metric_filter", "aws_sns_*"],
   },
+];
+
+// The stack's groups in the order a destroy actually removes them: apps first, the network last
+// (everything else lives in it). Shown in this order so the row that's waiting sits at the bottom.
+export const REMOVE_ORDER = [
+  "Tripwire app",
+  "Laminar app",
+  "Load balancer",
+  "Login page",
+  "Backups and alerts",
+  "Data server",
+  "Database",
+  "Network",
 ];
 
 // Types that count toward the step but get no line: quick, and meaningless to a user
@@ -115,6 +137,7 @@ export function startProgress(
   const groups: GroupProgress[] = defs.map((def) => ({
     name: def.name,
     note: def.notes?.[action],
+    waitNote: def.waitNotes?.[action],
     expected: new Set<string>(),
     running: new Set<string>(),
     completed: new Set<string>(),
@@ -125,8 +148,18 @@ export function startProgress(
     const def = groupFor(change.type, stack, change.address);
     if (def) groups[defs.indexOf(def)].expected.add(change.address);
   }
-  return { action, startedAt: now, groups: groups.filter((group) => group.expected.size > 0) };
+  const shown = groups.filter((group) => group.expected.size > 0);
+  return { action, startedAt: now, groups: action === "remove" ? inRemovalOrder(shown) : shown };
 }
+
+// Groups in REMOVE_ORDER; any group not listed keeps its place after the listed ones
+const inRemovalOrder = (groups: GroupProgress[]): GroupProgress[] => {
+  const rank = (name: string): number => {
+    const index = REMOVE_ORDER.indexOf(name);
+    return index === -1 ? REMOVE_ORDER.length : index;
+  };
+  return [...groups].sort((first, second) => rank(first.name) - rank(second.name));
+};
 
 function groupOf(progress: Progress, address: string): GroupProgress | undefined {
   return progress.groups.find((group) => group.expected.has(address));

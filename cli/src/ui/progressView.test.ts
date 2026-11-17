@@ -146,3 +146,23 @@ test("renderBlock widens the name column for long names so times line up", () =>
   const [first, second] = plain(renderBlock(block, 0)).slice(2);
   assert.equal(first.indexOf("4s") + 1, second.indexOf("57s") + 2, "times end in the same column");
 });
+
+test("progressBlock says why a group waits, and plain waiting when there's no reason", () => {
+  const plan = {
+    resource_changes: ["aws_vpc.main", "aws_subnet.private", "aws_db_instance.main"].map((address) => ({
+      address,
+      type: address.split(".")[0],
+      change: { actions: ["delete"] },
+    })),
+  };
+  const progress = startProgress(plan, "remove", 0);
+  const event = (type: "apply_start" | "apply_complete", address: string) =>
+    (type === "apply_complete"
+      ? { type, elapsedSeconds: 0, message: "", address, resourceType: address.split(".")[0], action: "delete" }
+      : { type, message: "", address, resourceType: address.split(".")[0], action: "delete" }) as TerraformEvent;
+  applyEvent(progress, event("apply_start", "aws_subnet.private"), 1_000);
+  applyEvent(progress, event("apply_complete", "aws_subnet.private"), 2_000);
+  const rows = progressBlock(progress, { title: "Removing Tripwire and Laminar", now: 3_000 }).rows;
+  assert.deepEqual(rows.find((row) => row.name === "Network")?.detail, "waiting for the database");
+  assert.equal(rows.find((row) => row.name === "Database")?.detail, undefined);
+});
