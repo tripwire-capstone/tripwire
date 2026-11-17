@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 import psycopg
 from dotenv import load_dotenv
 
+from ..project_keys import single_project_key
 from .settings import SettingsError, load_settings
 from .sql import unfinished
 
@@ -62,21 +63,33 @@ LIMIT %s
 """
 
 
+# Real mode with no OpenAI key: nothing can be summarized, so events wait by design. That's not a
+# fault (a fresh deploy has no key until someone opens Settings), so it's reported as healthy and
+# never trips the clustering-unhealthy alarm, which matches "clustering unhealthy:" in the logs.
+WAITING_FOR_KEY = "waiting for an OpenAI key: add it in Settings"
+
+
 @dataclass
 class HealthReport:
     problems: list = field(default_factory=list)
+    waiting: str | None = None   # healthy, but idle on purpose (WAITING_FOR_KEY)
 
     @property
     def healthy(self):
         return not self.problems
 
     def summary(self):
-        return "healthy" if self.healthy else f"{UNHEALTHY_PREFIX} " + "; ".join(self.problems)
+        if not self.healthy:
+            return f"{UNHEALTHY_PREFIX} " + "; ".join(self.problems)
+        return f"healthy ({self.waiting})" if self.waiting else "healthy"
 
 
 def check_clustering(conn, settings):
     """Q12's two rules against the database. Returns a HealthReport."""
     report = HealthReport()
+    if settings.mode == "real" and single_project_key(conn, "openai").value is None:
+        report.waiting = WAITING_FOR_KEY
+        return report
 
     stalled = conn.execute(STALLED_EVENT_SQL, (settings.health_stall_minutes,)).fetchone()
     if stalled is not None:

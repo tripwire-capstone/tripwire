@@ -28,6 +28,12 @@ def settings_for_tests(**overrides):
 SETTINGS = settings_for_tests()   # stall 15 min, failure run 10
 
 
+@pytest.fixture(autouse=True)
+def openai_key(monkeypatch):
+    """The rules only apply once the project has an OpenAI key (here, from the environment)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env-openai-key-1111")
+
+
 # ------------------------------------------------------------------ rule 1: a live event stalled
 
 def test_check_clustering_is_healthy_with_no_events(conn):
@@ -219,3 +225,28 @@ def test_main_exits_1_on_invalid_settings(monkeypatch, capsys):
     monkeypatch.setenv("CLUSTER_ASSIGN_THRESHOLD", "3")
     assert main(["--alive"]) == 1
     assert "CLUSTER_ASSIGN_THRESHOLD must be between 0 and 1" in capsys.readouterr().out
+
+
+# ------------------------------------------------------------------ no OpenAI key yet
+
+def test_check_clustering_without_an_openai_key_is_waiting_not_unhealthy(conn, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY")
+    version_id = add_signal(conn)[1]
+    add_event(conn, version_id, None, created_minutes_ago=60)   # unprepared: "stalled" with a key
+    report = check_clustering(conn, SETTINGS)
+    assert report.healthy and report.summary() == "healthy (waiting for an OpenAI key: add it in Settings)"
+    assert UNHEALTHY_PREFIX not in report.summary()   # so the alarm's log filter never matches
+
+
+def test_check_clustering_in_placeholder_mode_needs_no_openai_key(conn, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY")
+    report = check_clustering(conn, settings_for_tests(CLUSTERER_MODE="placeholder"))
+    assert report.healthy and report.waiting is None
+
+
+def test_check_clustering_uses_a_key_saved_in_settings(conn, monkeypatch):
+    from tripwire.project_keys import save_key
+    monkeypatch.delenv("OPENAI_API_KEY")
+    monkeypatch.setenv("TRIPWIRE_SECRET_KEY", "ab" * 32)
+    save_key(conn, conn.execute("SELECT id FROM projects").fetchone()[0], "openai", "sk-saved-key-2222222")
+    assert check_clustering(conn, SETTINGS).waiting is None

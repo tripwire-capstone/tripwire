@@ -113,7 +113,7 @@ Put the digest into `tripwire_image` (with a comment naming the commit), commit,
 ## Known limits (for now)
 
 - **One Laminar project.** Tripwire watches the project whose key was given at deploy. Laminar's "Signals" item redirects to the same Tripwire page from any project. For more projects later, the redirect becomes `/tripwire#{path}` plus a UI route that reads the project ID.
-- **Keys are still asked for by the CLI.** The Settings page saves keys (encrypted in `projects`), but until the workers read them there (next PR), the workers use the deploy's keys. After that, the CLI stops asking.
+- **Keys are still asked for by the CLI.** Keys saved on the Settings page win: the poller, runner, clusterer and test-run look them up on every loop, with no restart, and fall back to the deploy's keys from SSM. The next step is the CLI no longer asking.
 - **The Signals pages update on Refresh.** Only `/dev` refreshes on its own. A "new data" notice, or live updates like Laminar's Realtime toggle, is a possible follow-up.
 - **Laminar's sidebar item says "Signals" and opens in the same tab.** Renaming it or opening a new tab would need a fork of Laminar. Cmd+click opens a new tab.
 - **`tripwire destroy` keeps the two keys in SSM,** and reuses them on the next deploy.
