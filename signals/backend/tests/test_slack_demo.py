@@ -48,6 +48,9 @@ def sent(monkeypatch):
 
 def test_demo_rows_are_sent_once_after_connecting(conn, project, sent):
     add_critical_run(conn, project)  # before connecting: never sent
+    # Demo rows take this machine's clock and connecting takes the database's, which can run a few
+    # milliseconds behind: move the run clearly before connecting so the test doesn't race them.
+    conn.execute("UPDATE signal_runs SET finished_at = finished_at - interval '1 second'")
 
     save_slack_webhook(conn, project, WEBHOOK, ENV)
     add_critical_run(conn, project)

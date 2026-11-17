@@ -9,7 +9,12 @@ Alerts:
       - in a cluster that already had a critical alert since Slack was connected: skipped (logged
         with that cluster, never sent)
       - in another cluster, or its summary failed, or the wait is over: sent
+      - embedded POOL_SETTLE_SECONDS ago and still in no cluster: sent (left in the pool: new)
       - not placed yet: looked at again on the next poll
+    The pool check relies on the clusterer's pass order (loop.run_pass): prepare saves the
+    embedding, then assign tries to place it a few seconds later in the same pass. If a pass ever
+    takes longer than POOL_SETTLE_SECONDS between the two, a repeat can be sent (an extra message,
+    never a lost one). Tell the notifier's owner if that order changes.
     A stuck clusterer (or no OpenAI key) only delays an alert by the wait; it never hides one.
   * new_cluster: a new cluster, once it has a name (or after 30 s). Shows its name, which is the
     summary of a typical finding, how many findings and conversations it has, and a link.
@@ -46,6 +51,7 @@ MAX_TRIES = len(RETRY_DELAYS) + 1
 CLAIM_SECONDS = 60                    # a claimed alert is tried again after this if never resolved
 MAX_FINDING_CHARS = 300
 CLUSTER_WAIT_SECONDS = 60             # longest a critical alert waits for its event to be clustered
+POOL_SETTLE_SECONDS = 30              # embedded this long ago and in no cluster: left in the pool
 
 
 def _not_handled(kind: str, record: str) -> str:
@@ -67,6 +73,9 @@ SELECT r.id AS run_id, s.id AS signal_id, s.name AS signal_name,
        p.id AS project_id, p.slack_webhook_url_encrypted,
        (SELECT m.cluster_id FROM cluster_members AS m WHERE m.event_id = first.id LIMIT 1) AS cluster_id,
        (SELECT es.status FROM event_summaries AS es WHERE es.event_id = first.id) AS summary_status,
+       EXISTS (SELECT 1 FROM event_embeddings AS ee
+               WHERE ee.event_id = first.id
+                 AND ee.created_at <= now() - make_interval(secs => %(pool_settle)s)) AS left_in_pool,
        (%(cluster_wait)s::float8 IS NULL
         OR r.finished_at <= now() - make_interval(secs => %(cluster_wait)s::float8)) AS waited_enough,
        EXISTS (SELECT 1 FROM slack_notification_attempts AS a
@@ -157,7 +166,8 @@ ON CONFLICT (notification_type, record_id) DO NOTHING
 
 def find_critical_runs(conn, batch_size=50, cluster_wait=CLUSTER_WAIT_SECONDS):
     return conn.cursor(row_factory=dict_row).execute(
-        CRITICAL_RUNS_SQL, {"batch_size": batch_size, "cluster_wait": cluster_wait}).fetchall()
+        CRITICAL_RUNS_SQL, {"batch_size": batch_size, "cluster_wait": cluster_wait,
+                            "pool_settle": POOL_SETTLE_SECONDS}).fetchall()
 
 
 def critical_decision(conn, row) -> str:
@@ -169,7 +179,7 @@ def critical_decision(conn, row) -> str:
             "cluster_id": row["cluster_id"], "run_id": row["run_id"],
             "project_id": row["project_id"]}).fetchone()
         return "skip" if repeat else "send"
-    if row["summary_status"] == "failed" or row["waited_enough"]:
+    if row["summary_status"] == "failed" or row["left_in_pool"] or row["waited_enough"]:
         return "send"
     return "wait"
 

@@ -4,6 +4,7 @@ The notifier waits up to CLUSTER_WAIT_SECONDS for the clusterer to place a criti
 sends it, skips it as a repeat, or (not placed yet) looks again on the next poll.
 """
 
+from tripwire import notifier
 from tripwire.api.slack_settings import get_slack_status, save_slack_webhook
 from tripwire.placeholder import vector_text
 from tripwire.slack import SlackResult
@@ -178,3 +179,32 @@ def test_a_retry_is_not_skipped_after_its_event_joins_an_alerted_cluster(conn, p
 
     assert status_of(conn, retry_run)[0] == "sent"
     assert len(critical_sends(sent)) == 3  # the first alert, the failed try, the retry
+
+
+def embed(conn, event_id, seconds_ago):
+    """What the clusterer's prepare step does, `seconds_ago`: save the event's embedding."""
+    conn.execute("""INSERT INTO event_embeddings (event_id, model, embedding, created_at)
+                    VALUES (%s, 'test', %s::vector, now() - make_interval(secs => %s))""",
+                 (event_id, vector_text([0.0] * EMBEDDING_SIZE), seconds_ago))
+
+
+def test_an_event_left_in_the_pool_is_sent_before_the_full_wait(conn, project, slack_out):
+    sent, _ = slack_out
+    connect(conn, project)
+    _, event = critical_run(conn, project)  # finished just now: well under CLUSTER_WAIT_SECONDS
+    embed(conn, event, seconds_ago=notifier.POOL_SETTLE_SECONDS + 1)  # assign had its chance
+
+    poll(conn, cluster_wait=WAIT)
+
+    assert len(critical_sends(sent)) == 1
+
+
+def test_an_event_embedded_moments_ago_still_waits_for_assign(conn, project, slack_out):
+    sent, _ = slack_out
+    connect(conn, project)
+    run, event = critical_run(conn, project)
+    embed(conn, event, seconds_ago=5)
+
+    poll(conn, cluster_wait=WAIT)
+
+    assert sent == [] and status_of(conn, run) is None
