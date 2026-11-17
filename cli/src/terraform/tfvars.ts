@@ -37,6 +37,9 @@ export function buildTfvars(
       vars.db_backup_retention_days = 1;
       vars.data_instance_type = "c7i-flex.large";
     }
+    // Tripwire: the services exist only once a migration has succeeded (deploy.ts sets it)
+    if (config.tripwire?.servicesImage) vars.tripwire_services_image = config.tripwire.servicesImage;
+    if (config.tripwire?.laminarProjectId) vars.laminar_project_id = config.tripwire.laminarProjectId;
     if (restore) {
       vars.db_snapshot_identifier = restore.dbSnapshotId;
       vars.data_volume_snapshot_id = restore.dataVolumeSnapshotId;

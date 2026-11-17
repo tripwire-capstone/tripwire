@@ -52,8 +52,13 @@ def open_connection(database_url):
     return psycopg.connect(database_url, autocommit=True)
 
 
-def run_pass(conn, settings, prepare=prepare_stand_in):
-    """Run steps 1-5 once. Returns a PassResult; never raises for a failing step."""
+def run_pass(conn, settings, prepare=prepare_stand_in, name=None):
+    """Run steps 1-5 once. Returns a PassResult; never raises for a failing step.
+
+    `name` is step 4: naming.name_new_clusters (no LLM) unless __main__ passes llm_naming's
+    Namer (SIG-65). Either takes the connection and returns how many clusters it named. Looked up
+    when the pass runs, not when this file loads, so tests can still replace name_new_clusters."""
+    name = name_new_clusters if name is None else name
     result = PassResult()
 
     def attempt(step_name, function):
@@ -78,7 +83,7 @@ def run_pass(conn, settings, prepare=prepare_stand_in):
     ))
     result.created = created or 0
 
-    result.named = attempt("name", lambda: name_new_clusters(conn)) or 0
+    result.named = attempt("name", lambda: name(conn)) or 0
 
     touched = sorted({join.cluster_id for join in joins})   # empty if assign failed
     attempt("centers", lambda: update_centers(conn, touched))

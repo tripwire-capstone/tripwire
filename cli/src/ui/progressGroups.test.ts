@@ -205,3 +205,61 @@ test("groupSeconds counts only time spent working, not waiting", () => {
   applyEvent(progress, hook("apply_complete", "aws_ecs_service.frontend"), 462_000);
   assert.equal(groupSeconds(app, 500_000), 3, "2 s, then a 7-minute wait, then 1 s");
 });
+
+test("groupFor puts Tripwire's resources under Tripwire, whatever their type", () => {
+  assert.equal(groupFor("aws_ecs_service", "stack", 'aws_ecs_service.tripwire["api"]')?.name, "Tripwire app");
+  assert.equal(groupFor("aws_lb_listener_rule", "stack", "aws_lb_listener_rule.tripwire")?.name, "Tripwire app");
+  assert.equal(groupFor("aws_ssm_parameter", "stack", "aws_ssm_parameter.tripwire_database_url")?.name, "Tripwire app");
+  assert.equal(
+    groupFor("aws_cloudwatch_log_metric_filter", "stack", "aws_cloudwatch_log_metric_filter.clustering_unhealthy")?.name,
+    "Tripwire app",
+  );
+});
+
+test("groupFor keeps Laminar's resources where they were", () => {
+  assert.equal(groupFor("aws_ecs_service", "stack", "aws_ecs_service.frontend")?.name, "Laminar app");
+  assert.equal(groupFor("aws_lb_listener_rule", "stack", "aws_lb_listener_rule.api")?.name, "Load balancer");
+  assert.equal(groupFor("aws_ecs_service")?.name, "Laminar app");
+});
+
+const DESTROY_PLAN = planOf(
+  [
+    "aws_vpc.main",
+    "aws_db_instance.main",
+    "aws_instance.data",
+    "aws_lb.main",
+    "aws_cognito_user_pool.main",
+    'aws_ecs_service.tripwire["api"]',
+    "aws_ecs_service.frontend",
+    "aws_sns_topic.alerts",
+  ],
+  ["delete"],
+);
+
+test("startProgress lists a destroy's groups in the order they're removed", () => {
+  const progress = startProgress(DESTROY_PLAN, "remove", 0);
+  assert.deepEqual(progress.groups.map((group) => group.name), [
+    "Tripwire app",
+    "Laminar app",
+    "Load balancer",
+    "Login page",
+    "Backups and alerts",
+    "Data server",
+    "Database",
+    "Network",
+  ]);
+});
+
+test("startProgress keeps the build order for a deploy", () => {
+  const progress = startProgress(planOf(["aws_vpc.main", "aws_db_instance.main", "aws_ecs_service.frontend"]), "build", 0);
+  assert.deepEqual(progress.groups.map((group) => group.name), ["Network", "Database", "Laminar app"]);
+});
+
+test("startProgress gives a destroy's waiting and running notes", () => {
+  const progress = startProgress(DESTROY_PLAN, "remove", 0);
+  assert.equal(named(progress, "Network").waitNote, "waiting for the database");
+  assert.equal(named(progress, "Tripwire app").note, "letting open connections finish");
+  assert.equal(named(progress, "Laminar app").note, "letting open connections finish");
+  assert.equal(named(progress, "Database").note, "taking a final snapshot");
+  assert.equal(startProgress(DESTROY_PLAN, "build", 0).groups.find((group) => group.name === "Network")?.waitNote, undefined);
+});

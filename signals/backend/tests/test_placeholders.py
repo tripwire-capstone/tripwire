@@ -12,7 +12,7 @@ from tripwire.seed import seed
 
 
 def seeded(conn):
-    seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh", key_hint="abcd")
+    seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh")
     return conn.execute("SELECT id FROM projects WHERE name = 'default'").fetchone()[0]
 
 
@@ -41,14 +41,14 @@ def count(conn, table):
 # ------------------------------------------------------------------ seed
 
 def test_seed_creates_project_signal_and_version_once_and_no_cluster(conn, monkeypatch):
-    assert seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh", key_hint="abcd")
+    assert seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh")
     monkeypatch.delenv("JUDGE_DEFAULT_MODEL")
-    assert not seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh", key_hint="abcd")
+    assert not seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh")
     assert [count(conn, t) for t in ("signals", "signal_versions", "clusters")] == [1, 1, 0]
     assert conn.execute("SELECT model FROM signal_versions").fetchone()[0] == "gpt-6-luna"
-    key, hint = conn.execute("SELECT laminar_api_key_encrypted, laminar_api_key_hint FROM projects "
-                             "WHERE name = 'default'").fetchone()
-    assert bytes(key) == b"not-encrypted-yet" and hint == "abcd"   # never the real key
+    keys = conn.execute("SELECT laminar_api_key_encrypted, laminar_api_key_hint, openai_api_key_encrypted, "
+                        "openai_api_key_hint FROM projects WHERE name = 'default'").fetchone()
+    assert keys == (None, None, None, None)   # no saved keys: the workers use their environment
 
 
 @pytest.mark.parametrize("configured", [None, "placeholder"])
@@ -59,7 +59,7 @@ def test_fresh_seed_requires_a_model_before_writing(conn, monkeypatch, configure
         monkeypatch.setenv("JUDGE_DEFAULT_MODEL", configured)
 
     with pytest.raises(JudgeModelConfigError, match="JUDGE_DEFAULT_MODEL"):
-        seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh", key_hint="abcd")
+        seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh")
     assert [count(conn, t) for t in ("projects", "signals", "signal_versions", "clusters")] == [
         1, 0, 0, 0,
     ]

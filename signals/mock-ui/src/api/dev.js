@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ApiError } from "./client";
+import { BASE_PATH } from "../basePath";
 
 // The developer view's data (GET /api/dev/status). Kept in its own file so the developer view can be
 // removed in one go (backend tripwire/api/dev.py lists every place). It repeats a few lines of
@@ -8,7 +9,7 @@ import { ApiError } from "./client";
 async function getDevStatus() {
   let res;
   try {
-    res = await fetch("/api/dev/status");
+    res = await fetch(`${BASE_PATH}api/dev/status`);
   } catch {
     throw new ApiError(0, "Can't reach the API. Is the backend running?");
   }

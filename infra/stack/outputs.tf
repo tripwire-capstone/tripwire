@@ -52,3 +52,34 @@ output "laminar_grpc_endpoint" {
   description = "Where SDKs send traces over gRPC. Port 8443 is their default, so setting the base URL is enough."
   value       = "https://${local.laminar_domain}:8443"
 }
+# ---- Tripwire (read by the CLI to run the migration task and show the URL)
+
+output "tripwire_url" {
+  description = "Where Tripwire's UI is served (under Laminar's address)."
+  value       = local.tripwire_url
+}
+
+output "tripwire_image" {
+  description = "The image the migration task uses; the CLI gives it to the services once the migration succeeds."
+  value       = var.tripwire_image
+}
+
+output "tripwire_migrate_task_definition" {
+  description = "Task definition (family:revision ARN) of the one-off migration task."
+  value       = aws_ecs_task_definition.tripwire_migrate.arn
+}
+
+output "ecs_cluster_name" {
+  description = "ECS cluster that runs Laminar's and Tripwire's services."
+  value       = aws_ecs_cluster.main.name
+}
+
+output "app_security_group_id" {
+  description = "Security group of the ECS tasks; the migration task runs in it."
+  value       = aws_security_group.app.id
+}
+
+output "tripwire_logs_command" {
+  description = "Follow all Tripwire containers' logs (migrate, poller, runner, clusterer, api)."
+  value       = "aws logs tail ${aws_cloudwatch_log_group.tripwire.name} --follow"
+}

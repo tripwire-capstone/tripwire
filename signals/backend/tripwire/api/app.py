@@ -1,4 +1,5 @@
-"""Tripwire's HTTP API: signals (create, read, edit, on/off), their events and runs, and test-on-trace.
+"""Tripwire's HTTP API: signals (create, read, edit, on/off), their events and runs, test-on-trace,
+and the Settings page's keys (settings.py).
 
 Run: uvicorn tripwire.api.app:app --host 0.0.0.0 --port 8080
 """
@@ -771,6 +772,10 @@ def test_run(body: TestRunIn, conn=Depends(get_conn), judge_fn=Depends(get_judge
         analysis=result.analysis, model=result.model, input_tokens=u.input_tokens,
         cached_input_tokens=u.cached_input_tokens, output_tokens=u.output_tokens, cost_usd=u.cost_usd)
 
+
+# Settings page: Laminar and OpenAI keys (settings.py).
+from .settings import router as settings_router  # noqa: E402
+app.include_router(settings_router)
 
 # dev view: the developer page's endpoint (dev.py). To remove it, delete this block and dev.py.
 from .dev import router as dev_router  # noqa: E402

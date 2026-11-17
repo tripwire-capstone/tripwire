@@ -7,11 +7,12 @@ import { BrowserRouter } from 'react-router-dom';
 import { MantineProvider } from '@mantine/core';
 import { theme } from './theme';
 import App from './App';
+import { ROUTER_BASENAME } from './basePath';
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <MantineProvider theme={theme} defaultColorScheme="dark" forceColorScheme="dark">
-      <BrowserRouter>
+      <BrowserRouter basename={ROUTER_BASENAME}>
         <App />
       </BrowserRouter>
     </MantineProvider>

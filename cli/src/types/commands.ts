@@ -20,6 +20,8 @@ export interface DataPlan {
   stackEmpty: boolean;
   restore?: Restore;
   summary: string;
+  // The image Tripwire's services run now, from the stack's state; undefined = no services
+  servicesImage?: string;
 }
 
 export interface DestroyOptions {

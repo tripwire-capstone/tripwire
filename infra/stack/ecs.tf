@@ -45,7 +45,12 @@ locals {
     BETTER_AUTH_URL            = local.laminar_url
     NEXT_PUBLIC_URL            = local.laminar_url
     LAMINAR_TELEMETRY_DISABLED = "true"
-    DATABASE_SSL_ROOT_CERT     = data.http.rds_ca.response_body
+
+    # Shows Laminar's own "Signals" sidebar item (frontend lib/features/features.ts in v0.3.3: on
+    # self-hosted it needs only this). Its page is an enterprise-only stub in the open-source build,
+    # so the load balancer redirects it to Tripwire (aws_lb_listener_rule.tripwire_from_laminar_signals).
+    SIGNALS_ENABLED        = "true"
+    DATABASE_SSL_ROOT_CERT = data.http.rds_ca.response_body
 
     # The frontend runs the ClickHouse migrations, and its migration tool leaks one pooled
     # connection per statement; with the default pool of 10 every tenth statement waits 30 s.
@@ -110,6 +115,22 @@ data "aws_iam_policy_document" "ecs_execution_secrets" {
     sid       = "ReadLaminarSecrets"
     actions   = ["ssm:GetParameters"]
     resources = distinct(values(local.frontend_secrets))
+  }
+
+  # Tripwire's tasks (tripwire.tf): its own database URL, and the master URL + password for the
+  # migration task. The OpenAI and Laminar keys are written by the CLI, so they're named by ARN.
+  statement {
+    sid     = "ReadTripwireSecrets"
+    actions = ["ssm:GetParameters"]
+    resources = concat(
+      [
+        aws_ssm_parameter.tripwire_database_url.arn,
+        aws_ssm_parameter.tripwire_db_password.arn,
+        aws_ssm_parameter.database_url.arn,
+        local.tripwire_secret_key_arn,
+      ],
+      values(local.tripwire_cli_secret_arn),
+    )
   }
 }
 

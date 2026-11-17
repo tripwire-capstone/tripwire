@@ -1,4 +1,5 @@
 import { browserZone } from "../components/format";
+import { BASE_PATH } from "../basePath";
 
 // Raw calls to the Tripwire API. Pages don't use this file directly: they use src/api/index.js.
 
@@ -13,7 +14,7 @@ export class ApiError extends Error {
 async function request(method, path, body) {
   let res;
   try {
-    res = await fetch(`/api${path}`, {
+    res = await fetch(`${BASE_PATH}api${path}`, {
       method,
       headers: body ? { "Content-Type": "application/json" } : undefined,
       body: body ? JSON.stringify(body) : undefined,
@@ -65,3 +66,7 @@ export const testRun = (laminarTraceId, definition) =>
     laminar_trace_id: laminarTraceId,
     definition,
   });
+// Settings: kind is "laminar" or "openai". Responses carry hints only, never a key.
+export const getSettings = () => request("GET", "/settings");
+export const setKey = (kind, apiKey) => request("PUT", `/settings/${kind}`, { api_key: apiKey });
+export const clearKey = (kind) => request("DELETE", `/settings/${kind}`);

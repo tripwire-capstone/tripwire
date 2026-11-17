@@ -24,6 +24,17 @@ resource "random_id" "auth_secret" {
   }
 }
 
+# Tripwire's encryption key for the API keys saved on its Settings page (TRIPWIRE_SECRET_KEY);
+# a new value makes them unreadable, like aead_secret_key. Here rather than in the stack so a
+# teardown and restore keeps it; moves with the others when persistent/ merges into the stack
+resource "random_id" "tripwire_secret_key" {
+  byte_length = 32
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 resource "aws_ssm_parameter" "shared_secret_token" {
   name        = "/${var.name}/laminar/shared_secret_token"
   description = "Shared between Laminar's frontend and app-server; both must hold the same value."
@@ -43,4 +54,11 @@ resource "aws_ssm_parameter" "auth_secret" {
   description = "Signs Laminar's login sessions; used as both NEXTAUTH_SECRET and BETTER_AUTH_SECRET."
   type        = "SecureString"
   value       = random_id.auth_secret.hex
+}
+
+resource "aws_ssm_parameter" "tripwire_secret_key" {
+  name        = "/${var.name}/tripwire/secret_key"
+  description = "Encrypts the API keys saved on Tripwire's Settings page; every Tripwire service holds the same value."
+  type        = "SecureString"
+  value       = random_id.tripwire_secret_key.hex
 }
