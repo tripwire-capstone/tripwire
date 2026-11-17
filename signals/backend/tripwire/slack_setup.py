@@ -4,7 +4,7 @@
     python -m tripwire.slack_setup status
     python -m tripwire.slack_setup disconnect
 
-connect encrypts the webhook with TRIPWIRE_SECRET_KEY and stores it on the project. Leave
+connect encrypts the webhook with TRIPWIRE_SECRET_KEY (tripwire/crypto.py) and stores it on the project. Leave
 WEBHOOK_URL out to read TRIPWIRE_SLACK_WEBHOOK_URL from the environment (or .env), which keeps
 the URL out of your shell history. Only alerts for runs and clusters that finish after
 connecting are sent; reconnecting starts that clock again.
@@ -17,9 +17,9 @@ import argparse
 import os
 
 import psycopg
-from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 
+from . import crypto
 from .api.slack_settings import disconnect_slack, get_slack_status, save_slack_webhook
 
 DEFAULT_PROJECT = "default"
@@ -30,13 +30,6 @@ def find_project(conn, name: str) -> int:
     if row is None:
         raise SystemExit(f"No project named {name!r}. Run the seed first: python -m tripwire.seed")
     return row[0]
-
-
-def load_cipher() -> Fernet:
-    try:
-        return Fernet(os.environ["TRIPWIRE_SECRET_KEY"])
-    except (KeyError, ValueError):
-        raise SystemExit("Set TRIPWIRE_SECRET_KEY to a valid Fernet key") from None
 
 
 def describe(status: dict) -> str:
@@ -72,8 +65,8 @@ def main(argv=None):
             if not webhook_url.strip():
                 raise SystemExit("Pass a webhook URL or set TRIPWIRE_SLACK_WEBHOOK_URL")
             try:
-                status = save_slack_webhook(conn, project_id, webhook_url, load_cipher())
-            except ValueError as error:
+                status = save_slack_webhook(conn, project_id, webhook_url)
+            except (ValueError, crypto.SecretKeyError) as error:
                 raise SystemExit(str(error)) from None
         elif args.command == "disconnect":
             status = disconnect_slack(conn, project_id)

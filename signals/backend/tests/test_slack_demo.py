@@ -4,15 +4,15 @@ import json
 from threading import Event
 
 import pytest
-from cryptography.fernet import Fernet
 
-from tripwire import notifier
+from tripwire import crypto, notifier
 from tripwire.api.slack_settings import disconnect_slack, get_slack_status, save_slack_webhook
 from tripwire.slack import SlackResult
 from tripwire.slack_demo import add_cluster, add_critical_run
 from tripwire.slack_setup import find_project
 
 WEBHOOK = "https://hooks.slack.com/services/T000/B000/XXXX"
+ENV = {"TRIPWIRE_SECRET_KEY": "ab" * 32}  # the master key, as tripwire/crypto.py expects it
 SCHEMA = [
     {"name": "reason", "type": "string", "description": "Why the user seems frustrated"},
     {"name": "severity", "type": "enum", "choices": ["low", "medium", "high"]},
@@ -47,15 +47,14 @@ def sent(monkeypatch):
 
 
 def test_demo_rows_are_sent_once_after_connecting(conn, project, sent):
-    cipher = Fernet(Fernet.generate_key())
     add_critical_run(conn, project)  # before connecting: never sent
 
-    save_slack_webhook(conn, project, WEBHOOK, cipher)
+    save_slack_webhook(conn, project, WEBHOOK, ENV)
     add_critical_run(conn, project)
     add_cluster(conn, project)
 
-    notifier.poll_once(conn, cipher, Event())
-    notifier.poll_once(conn, cipher, Event())
+    notifier.poll_once(conn, Event(), environ=ENV)
+    notifier.poll_once(conn, Event(), environ=ENV)
 
     assert [url for _, url in sent] == [WEBHOOK, WEBHOOK]
     assert "*Critical*" in sent[0][0] and "credit card" in sent[0][0]
@@ -98,17 +97,30 @@ def test_demo_rows_have_the_real_pipelines_shape(conn, project):
 
 
 def test_nothing_is_sent_after_disconnecting(conn, project, sent):
-    cipher = Fernet(Fernet.generate_key())
-    save_slack_webhook(conn, project, WEBHOOK, cipher)
+    save_slack_webhook(conn, project, WEBHOOK, ENV)
     disconnect_slack(conn, project)
     add_critical_run(conn, project)
     add_cluster(conn, project)
 
-    notifier.poll_once(conn, cipher, Event())
+    notifier.poll_once(conn, Event(), environ=ENV)
 
     assert sent == []
 
 
 def test_connect_rejects_non_slack_urls(conn, project):
     with pytest.raises(ValueError):
-        save_slack_webhook(conn, project, "https://example.com/hook", Fernet(Fernet.generate_key()))
+        save_slack_webhook(conn, project, "https://example.com/hook", ENV)
+
+
+def test_connect_needs_a_valid_master_key(conn, project):
+    with pytest.raises(crypto.SecretKeyError):
+        save_slack_webhook(conn, project, WEBHOOK, {"TRIPWIRE_SECRET_KEY": "not-64-hex"})
+    assert get_slack_status(conn, project)["configured"] is False
+
+
+def test_the_webhook_is_stored_encrypted_with_the_shared_master_key(conn, project):
+    save_slack_webhook(conn, project, WEBHOOK, ENV)
+    (stored,) = conn.execute("SELECT slack_webhook_url_encrypted FROM projects WHERE id = %s",
+                             (project,)).fetchone()
+    assert WEBHOOK.encode() not in bytes(stored)
+    assert crypto.decrypt(stored, ENV) == WEBHOOK

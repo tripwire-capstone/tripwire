@@ -1,7 +1,8 @@
 """Manage Slack settings for a resolved project."""
 
-from cryptography.fernet import Fernet
+import os
 
+from .. import crypto
 from ..slack import parse_slack_webhook_url
 
 
@@ -37,14 +38,17 @@ def get_slack_status(conn, project_id: int) -> dict:
     }
 
 
-def save_slack_webhook(
-    conn, project_id: int, webhook_url: str, cipher: Fernet
-) -> dict:
+def save_slack_webhook(conn, project_id: int, webhook_url: str, environ=os.environ) -> dict:
+    """Store the webhook encrypted with TRIPWIRE_SECRET_KEY (crypto.py, like the saved API keys).
+
+    Raises ValueError for a URL that isn't a Slack incoming webhook, and crypto.SecretKeyError when
+    TRIPWIRE_SECRET_KEY is missing or malformed.
+    """
     url = parse_slack_webhook_url(webhook_url)
     if url is None:
         raise ValueError("Enter a valid Slack incoming webhook URL.")
 
-    encrypted_url = cipher.encrypt(url.geturl().encode("utf-8"))
+    encrypted_url = crypto.encrypt(url.geturl(), environ)
 
     (enabled_at,) = conn.execute(
         """

@@ -4,20 +4,14 @@ import uuid
 from threading import Event
 
 import pytest
-from cryptography.fernet import Fernet
 
 from tripwire import notifier, slack
 from tripwire.api.slack_settings import get_slack_status, save_slack_webhook
 from tripwire.slack import SlackResult, post_slack
 from tripwire.slack_demo import add_cluster, add_critical_run
-from tests.test_slack_demo import WEBHOOK, project  # noqa: F401  (project is a fixture)
+from tests.test_slack_demo import ENV, WEBHOOK, project  # noqa: F401  (project is a fixture)
 
 UI = "https://tripwire.test"
-
-
-@pytest.fixture
-def cipher():
-    return Fernet(Fernet.generate_key())
 
 
 @pytest.fixture
@@ -33,8 +27,8 @@ def slack_out(monkeypatch):
     return sent, results
 
 
-def poll(conn, cipher):
-    notifier.poll_once(conn, cipher, Event(), UI)
+def poll(conn, environ=ENV):
+    notifier.poll_once(conn, Event(), UI, environ)
 
 
 def attempt(conn, kind="critical_run"):
@@ -54,19 +48,19 @@ def make_due(conn):
 # ------------------------------------------------------------------ messages
 
 
-def test_critical_alert_shows_the_finding_and_links_to_it(conn, project, cipher, slack_out):
+def test_critical_alert_shows_the_finding_and_links_to_it(conn, project, slack_out):
     sent, _ = slack_out
     laminar_project = uuid.uuid4()
     conn.execute("UPDATE projects SET laminar_project_id = %s, laminar_ui_url = 'https://laminar.test/'",
                  (laminar_project,))
-    save_slack_webhook(conn, project, WEBHOOK, cipher)
+    save_slack_webhook(conn, project, WEBHOOK, ENV)
     add_critical_run(conn, project)
     signal_id, event_id, trace = conn.execute(
         """SELECT v.signal_id, e.id, t.laminar_trace_id FROM signal_events e
            JOIN signal_versions v ON v.id = e.signal_version_id JOIN traces t ON t.id = e.trace_id"""
     ).fetchone()
 
-    poll(conn, cipher)
+    poll(conn)
 
     (text,) = sent
     assert text.startswith(":rotating_light: *Critical* in *Frustration*")
@@ -76,23 +70,23 @@ def test_critical_alert_shows_the_finding_and_links_to_it(conn, project, cipher,
     assert "run #" not in text
 
 
-def test_critical_alert_has_no_laminar_link_without_a_laminar_project(conn, project, cipher, slack_out):
+def test_critical_alert_has_no_laminar_link_without_a_laminar_project(conn, project, slack_out):
     sent, _ = slack_out
-    save_slack_webhook(conn, project, WEBHOOK, cipher)
+    save_slack_webhook(conn, project, WEBHOOK, ENV)
     add_critical_run(conn, project)
 
-    poll(conn, cipher)
+    poll(conn)
 
     assert "Open in Tripwire" in sent[0] and "Laminar" not in sent[0]
 
 
-def test_cluster_alert_shows_its_size_and_links_to_it(conn, project, cipher, slack_out):
+def test_cluster_alert_shows_its_size_and_links_to_it(conn, project, slack_out):
     sent, _ = slack_out
-    save_slack_webhook(conn, project, WEBHOOK, cipher)
+    save_slack_webhook(conn, project, WEBHOOK, ENV)
     add_cluster(conn, project)
     signal_id, cluster_id = conn.execute("SELECT signal_id, id FROM clusters").fetchone()
 
-    poll(conn, cipher)
+    poll(conn)
 
     (text,) = sent
     assert text.startswith(":jigsaw: *New cluster* in *Frustration* · 3 findings in 2 conversations")
@@ -108,15 +102,15 @@ def test_finding_text_prefers_the_signals_first_text_field():
     assert notifier.finding_text({}, schema, "Old description") == "Old description"
 
 
-def test_long_findings_are_shortened_at_a_word_and_markup_is_escaped(conn, project, cipher, slack_out):
+def test_long_findings_are_shortened_at_a_word_and_markup_is_escaped(conn, project, slack_out):
     assert notifier.shorten("word " * 100, 20) == "word word word word…"
     assert notifier.shorten("a\n  b") == "a b"
     sent, _ = slack_out
     conn.execute("UPDATE signals SET name = 'Refunds <&> returns'")
-    save_slack_webhook(conn, project, WEBHOOK, cipher)
+    save_slack_webhook(conn, project, WEBHOOK, ENV)
     add_critical_run(conn, project)
 
-    poll(conn, cipher)
+    poll(conn)
 
     assert "*Refunds &lt;&amp;&gt; returns*" in sent[0]
 
@@ -124,46 +118,46 @@ def test_long_findings_are_shortened_at_a_word_and_markup_is_escaped(conn, proje
 # ------------------------------------------------------------------ retries
 
 
-def test_a_failed_send_is_retried_later_and_then_sent(conn, project, cipher, slack_out):
+def test_a_failed_send_is_retried_later_and_then_sent(conn, project, slack_out):
     sent, results = slack_out
     results.append(SlackResult(ok=False, retryable=True, error="TimeoutError"))
-    save_slack_webhook(conn, project, WEBHOOK, cipher)
+    save_slack_webhook(conn, project, WEBHOOK, ENV)
     add_critical_run(conn, project)
 
-    poll(conn, cipher)
+    poll(conn)
     status, tries, later, error, wait = attempt(conn)
     assert (status, tries, later, error) == ("pending", 1, True, "TimeoutError")
     assert 25 < wait <= 30
 
-    poll(conn, cipher)  # not due yet
+    poll(conn)  # not due yet
     assert len(sent) == 1
 
     make_due(conn)
-    poll(conn, cipher)
+    poll(conn)
     assert len(sent) == 2
     assert attempt(conn)[:2] == ("sent", 2)
     assert get_slack_status(conn, project)["verified_at"] is not None
 
 
-def test_slacks_retry_after_is_respected(conn, project, cipher, slack_out):
+def test_slacks_retry_after_is_respected(conn, project, slack_out):
     _, results = slack_out
     results.append(SlackResult(ok=False, retryable=True, error="HTTP 429", retry_after=900))
-    save_slack_webhook(conn, project, WEBHOOK, cipher)
+    save_slack_webhook(conn, project, WEBHOOK, ENV)
     add_critical_run(conn, project)
 
-    poll(conn, cipher)
+    poll(conn)
 
     assert 890 < attempt(conn)[4] <= 900
 
 
-def test_retries_stop_after_the_last_try(conn, project, cipher, slack_out):
+def test_retries_stop_after_the_last_try(conn, project, slack_out):
     sent, results = slack_out
     results.extend([SlackResult(ok=False, retryable=True, error="HTTP 503")] * 10)
-    save_slack_webhook(conn, project, WEBHOOK, cipher)
+    save_slack_webhook(conn, project, WEBHOOK, ENV)
     add_critical_run(conn, project)
 
     for _ in range(notifier.MAX_TRIES + 2):
-        poll(conn, cipher)
+        poll(conn)
         make_due(conn)
 
     assert len(sent) == notifier.MAX_TRIES
@@ -173,46 +167,46 @@ def test_retries_stop_after_the_last_try(conn, project, cipher, slack_out):
     assert status["last_error"] == "HTTP 503"
 
 
-def test_a_refused_message_fails_at_once(conn, project, cipher, slack_out):
+def test_a_refused_message_fails_at_once(conn, project, slack_out):
     sent, results = slack_out
     results.append(SlackResult(ok=False, error="HTTP 404: no_service"))
-    save_slack_webhook(conn, project, WEBHOOK, cipher)
+    save_slack_webhook(conn, project, WEBHOOK, ENV)
     add_critical_run(conn, project)
 
-    poll(conn, cipher)
+    poll(conn)
     make_due(conn)
-    poll(conn, cipher)
+    poll(conn)
 
     assert len(sent) == 1
     assert attempt(conn)[:2] == ("failed", 1)
     assert get_slack_status(conn, project)["verified_at"] is None
 
 
-def test_an_undecryptable_webhook_fails_and_says_why(conn, project, cipher, slack_out):
+def test_an_undecryptable_webhook_fails_and_says_why(conn, project, slack_out):
     sent, _ = slack_out
-    save_slack_webhook(conn, project, WEBHOOK, cipher)
+    save_slack_webhook(conn, project, WEBHOOK, ENV)
     add_critical_run(conn, project)
 
-    poll(conn, Fernet(Fernet.generate_key()))  # the key changed
+    poll(conn, {"TRIPWIRE_SECRET_KEY": "cd" * 32})  # the key changed
 
     assert sent == []
     status, _, _, error, _ = attempt(conn)
     assert status == "failed" and "TRIPWIRE_SECRET_KEY" in error
 
 
-def test_a_claim_left_by_a_dead_notifier_is_retried_after_it_expires(conn, project, cipher, slack_out):
+def test_a_claim_left_by_a_dead_notifier_is_retried_after_it_expires(conn, project, slack_out):
     sent, _ = slack_out
-    save_slack_webhook(conn, project, WEBHOOK, cipher)
+    save_slack_webhook(conn, project, WEBHOOK, ENV)
     add_critical_run(conn, project)
     run_id, webhook = conn.execute(
         "SELECT r.id, p.slack_webhook_url_encrypted FROM signal_runs r, projects p").fetchone()
     assert notifier.claim(conn, "critical_run", run_id, project_id=project, encrypted_webhook=webhook) == 1
 
-    poll(conn, cipher)  # still claimed
+    poll(conn)  # still claimed
     assert sent == []
 
     make_due(conn)
-    poll(conn, cipher)
+    poll(conn)
     assert len(sent) == 1 and attempt(conn)[:2] == ("sent", 2)
 
 

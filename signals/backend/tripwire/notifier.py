@@ -25,9 +25,9 @@ from html import escape
 from threading import Event
 
 import psycopg
-from cryptography.fernet import Fernet, InvalidToken
 from psycopg.rows import dict_row
 
+from . import crypto
 from .slack import SlackResult, post_slack
 
 log = logging.getLogger(__name__)
@@ -240,14 +240,14 @@ def record_result(conn, kind, record_id, tries: int, result: SlackResult) -> Non
                   kind, record_id, tries, "try" if tries == 1 else "tries", result.error)
 
 
-def deliver(conn, kind, record_id, text, *, project_id, encrypted_webhook, cipher) -> None:
+def deliver(conn, kind, record_id, text, *, project_id, encrypted_webhook, environ=os.environ) -> None:
     """Claim, send and record one alert. Use an autocommit connection so the claim is saved first."""
     tries = claim(conn, kind, record_id, project_id=project_id, encrypted_webhook=encrypted_webhook)
     if tries is None:
         return
     try:
-        webhook_url = cipher.decrypt(encrypted_webhook).decode("utf-8")
-    except (InvalidToken, UnicodeDecodeError):
+        webhook_url = crypto.decrypt(encrypted_webhook, environ)
+    except (crypto.UnreadableError, UnicodeDecodeError):
         result = SlackResult(ok=False, error="cannot decrypt the webhook: was TRIPWIRE_SECRET_KEY changed?")
     else:
         result = post_slack(text, webhook_url=webhook_url)
@@ -256,28 +256,28 @@ def deliver(conn, kind, record_id, text, *, project_id, encrypted_webhook, ciphe
         mark_slack_verified(conn, project_id, encrypted_webhook)
 
 
-def poll_once(conn, cipher, stop, ui_url: str = DEFAULT_UI_URL):
+def poll_once(conn, stop, ui_url: str = DEFAULT_UI_URL, environ=os.environ):
     for row in find_critical_runs(conn):
         if stop.is_set():
             return
         deliver(conn, "critical_run", row["run_id"], critical_message(row, ui_url),
                 project_id=row["project_id"], encrypted_webhook=row["slack_webhook_url_encrypted"],
-                cipher=cipher)
+                environ=environ)
 
     for row in find_new_clusters(conn):
         if stop.is_set():
             return
         deliver(conn, "new_cluster", row["cluster_id"], cluster_message(row, ui_url),
                 project_id=row["project_id"], encrypted_webhook=row["slack_webhook_url_encrypted"],
-                cipher=cipher)
+                environ=environ)
 
 
 def main():
     logging.basicConfig(level=logging.INFO)
     try:
-        cipher = Fernet(os.environ["TRIPWIRE_SECRET_KEY"])
-    except (KeyError, ValueError):
-        raise SystemExit("Set TRIPWIRE_SECRET_KEY to a valid Fernet key") from None
+        crypto.encrypt("")  # checks TRIPWIRE_SECRET_KEY now, not at the first alert
+    except crypto.SecretKeyError as error:
+        raise SystemExit(str(error)) from None
 
     interval_setting = "TRIPWIRE_SLACK_POLL_INTERVAL_SECONDS"
     try:
@@ -301,7 +301,7 @@ def main():
         try:
             with psycopg.connect(database_url, autocommit=True, connect_timeout=5) as conn:
                 while not stop.is_set():
-                    poll_once(conn, cipher, stop, ui_url)
+                    poll_once(conn, stop, ui_url)
                     stop.wait(interval)
         except psycopg.OperationalError as error:
             log.warning("Slack notifier database connection failed (%s)", type(error).__name__)
