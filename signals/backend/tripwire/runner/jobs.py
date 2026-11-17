@@ -8,6 +8,7 @@ result is thrown away.
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import NamedTuple
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -48,7 +49,7 @@ RETURNING id, attempts, created_at
 LOAD_SQL = """
 SELECT t.id, t.laminar_trace_id::text, t.session_id, t.started_at, t.ended_at, t.status,
        v.id, v.signal_id, s.name, v.instruction, v.critical_guidance, v.output_schema, v.model,
-       p.laminar_api_url
+       p.id, p.name, p.laminar_api_url
 FROM signal_runs r
 JOIN traces t ON t.id = r.trace_id
 JOIN projects p ON p.id = t.project_id
@@ -130,14 +131,21 @@ def claim(conn, settings):
     return Claim(*row) if row else None
 
 
+class RunProject(NamedTuple):
+    """The project a run belongs to: its keys are looked up per run (tripwire/project_keys.py)."""
+    id: int
+    name: str
+    laminar_api_url: str
+
+
 def load(conn, run_id):
-    """The run's trace and signal version, and its project's Laminar API URL."""
+    """The run's trace, signal version and project."""
     r = conn.execute(LOAD_SQL, (run_id,)).fetchone()
     trace = TraceRow(id=r[0], laminar_trace_id=r[1], session_id=r[2], started_at=r[3],
                      ended_at=r[4], status=r[5])
     version = SignalVersion(id=r[6], signal_id=r[7], name=r[8], instruction=r[9],
                             critical_guidance=r[10], output_schema=r[11], model=r[12])
-    return trace, version, r[13]
+    return trace, version, RunProject(r[13], r[14], r[15])
 
 
 def _usage(usage: Usage):

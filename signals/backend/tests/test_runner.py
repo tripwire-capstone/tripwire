@@ -7,14 +7,19 @@ import pytest
 from tripwire.judge.types import Finding, JudgeError, JudgeResult, Usage
 from tripwire.runner import jobs
 from tripwire.runner.settings import Settings
-from tripwire.runner.worker import backoff_seconds, work_once
+import logging
+
+from tripwire.project_keys import KeyWatch, save_key
+from tripwire.runner.worker import MISSING_KEY_RETRY_SECONDS, ProjectClients, backoff_seconds, work_once
 
 SETTINGS = Settings()
 
 
 class UnusedClients:
-    def get(self, api_url):
-        return None
+    """Fake judges never use the Laminar client; they only see the OpenAI key."""
+
+    def for_run(self, conn, project):
+        return None, "sk-test"
 
 
 CLIENTS = UnusedClients()
@@ -44,7 +49,7 @@ def result(findings=1, cost=0.01):
 
 
 def judge_that(outcome):
-    def fake(laminar, trace, version):
+    def fake(laminar, trace, version, *, openai_api_key):
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
@@ -214,3 +219,75 @@ def test_backoff_uses_retry_after_and_stays_under_the_cap():
     assert backoff_seconds(7, 0, SETTINGS) == 7
     assert backoff_seconds(None, 10_000, SETTINGS, rand=lambda: 1.0) == SETTINGS.max_backoff_seconds
     assert 3.75 <= backoff_seconds(None, 0, SETTINGS, rand=lambda: 0.0) <= 6.25
+
+
+# ------------------------------------------------------------------ keys (looked up per run)
+
+SECRET = "ab" * 32
+
+
+@pytest.fixture
+def keys_env(monkeypatch):
+    monkeypatch.setenv("TRIPWIRE_SECRET_KEY", SECRET)
+    monkeypatch.setenv("LMNR_PROJECT_API_KEY", "env-laminar-key-0000")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env-openai-key-1111")
+
+
+def project_clients():
+    return ProjectClients(KeyWatch(logging.getLogger("test")))
+
+
+def judge_recording(seen):
+    def fake(laminar, trace, version, *, openai_api_key):
+        seen.append((laminar._client.headers["Authorization"], openai_api_key))
+        return result(findings=0)
+    return fake
+
+
+def test_runner_judges_with_the_environment_keys_when_none_are_saved(conn, keys_env):
+    add_run(conn)
+    seen = []
+    work_once(conn, SETTINGS, project_clients(), judge_recording(seen))
+    assert seen == [("Bearer env-laminar-key-0000", "sk-env-openai-key-1111")]
+
+
+def test_runner_uses_a_key_saved_in_settings_on_the_next_run(conn, keys_env):
+    clients = project_clients()
+    seen = []
+    add_run(conn)
+    work_once(conn, SETTINGS, clients, judge_recording(seen))
+    project = conn.execute("SELECT id FROM projects").fetchone()[0]
+    save_key(conn, project, "openai", "sk-saved-key-2222222")
+    add_run(conn)
+    work_once(conn, SETTINGS, clients, judge_recording(seen))
+    assert [openai for _, openai in seen] == ["sk-env-openai-key-1111", "sk-saved-key-2222222"]
+
+
+@pytest.mark.parametrize("unset, message", [
+    (["OPENAI_API_KEY"], "no OpenAI key: add it in Settings"),
+    (["LMNR_PROJECT_API_KEY"], "no Laminar key: add it in Settings"),
+    (["LMNR_PROJECT_API_KEY", "OPENAI_API_KEY"], "no Laminar or OpenAI key: add it in Settings"),
+])
+def test_runner_with_a_key_missing_waits_without_using_an_attempt(conn, keys_env, monkeypatch, unset, message):
+    for name in unset:
+        monkeypatch.delenv(name)
+    run_id, _, _ = add_run(conn)
+    judged = []
+    work_once(conn, SETTINGS, project_clients(), judge_recording(judged))
+    status, attempts, waiting, last_error = run_row(conn, run_id)[:4]
+    assert (status, attempts, waiting, last_error) == ("pending", 0, True, message)
+    assert judged == []
+    wait = conn.execute("SELECT extract(epoch FROM not_before - now()) FROM signal_runs WHERE id = %s",
+                        (run_id,)).fetchone()[0]
+    assert MISSING_KEY_RETRY_SECONDS - 5 < wait <= MISSING_KEY_RETRY_SECONDS
+
+
+def test_runner_runs_a_waiting_run_once_the_key_is_saved(conn, keys_env, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY")
+    run_id, _, _ = add_run(conn)
+    clients = project_clients()
+    work_once(conn, SETTINGS, clients, judge_recording([]))
+    save_key(conn, conn.execute("SELECT id FROM projects").fetchone()[0], "openai", "sk-saved-key-2222222")
+    ready(conn)
+    work_once(conn, SETTINGS, clients, judge_recording([]))
+    assert run_row(conn, run_id)[:2] == ("done", 1)

@@ -8,7 +8,7 @@ from tripwire.judge.types import Finding, JudgeError, SignalVersion, TraceRow, U
 from tripwire.llm._openai import _complete_openai
 
 
-def test_judge_uses_real_adapter_and_configured_timeout(monkeypatch):
+def test_judge_uses_real_adapter_with_the_given_key_and_configured_timeout(monkeypatch):
     now = datetime(2026, 11, 11, tzinfo=timezone.utc)
     trace = TraceRow(1, "00000000-0000-0000-0000-000000000001", None, now, now, "success")
     version = SignalVersion(1, 1, "Failure", "Find failures.", None, [], "test-model")
@@ -16,11 +16,12 @@ def test_judge_uses_real_adapter_and_configured_timeout(monkeypatch):
     monkeypatch.setenv("JUDGE_MODEL_TIMEOUT_SECONDS", "45")
 
     with patch("tripwire.judge.judge._judge_trace") as judge_trace:
-        assert judge(laminar, trace, version) is judge_trace.return_value
+        assert judge(laminar, trace, version, openai_api_key="sk-project") is judge_trace.return_value
 
-    judge_trace.assert_called_once_with(
-        laminar, trace, version, complete=_complete_openai, model_timeout=45
-    )
+    args, kwargs = judge_trace.call_args
+    assert args == (laminar, trace, version) and kwargs["model_timeout"] == 45
+    assert kwargs["complete"].func is _complete_openai
+    assert kwargs["complete"].keywords == {"api_key": "sk-project"}
 
 
 def test_usage_adds_up():
