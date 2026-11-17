@@ -160,8 +160,9 @@ variable "alert_email" {
 variable "tripwire_image" {
   description = "The published Tripwire image, pinned by digest (ghcr.io/<owner>/tripwire-backend@sha256:...). The migration task always uses it; the services get it through tripwire_services_image."
   type        = string
-  # Built from commit d553254 (tag :d553254). When publishing a new image, replace the digest.
-  default = "ghcr.io/tripwire-capstone/tripwire-backend@sha256:e64f51d38e08cfc8a077a4a41e90f3c4e22b9a10f4171a636ba7cc3a29f4bc56"
+  # Built from commit c091801 (tag :c091801): the Settings page, workers reading its keys, no keys
+  # from the deploy (SIG-103). When publishing a new image, replace the digest.
+  default = "ghcr.io/tripwire-capstone/tripwire-backend@sha256:fadbf14daf461dc01171143ad13c4d64472cb91befb5e4357503cb5a3f23230b"
 
   validation {
     condition     = var.tripwire_image != null && can(regex("^[a-z0-9.-]+(/[a-z0-9._-]+)+@sha256:[a-f0-9]{64}$", var.tripwire_image))
@@ -177,17 +178,6 @@ variable "tripwire_services_image" {
   validation {
     condition     = var.tripwire_services_image == "" || can(regex("^[a-z0-9.-]+(/[a-z0-9._-]+)+@sha256:[a-f0-9]{64}$", var.tripwire_services_image))
     error_message = "tripwire_services_image must be empty or an image pinned by digest (...@sha256:<64 hex characters>)."
-  }
-}
-
-variable "laminar_project_id" {
-  description = "ID of the Laminar project Tripwire watches (the UUID in its Laminar URL). Used for \"Open in Laminar\" links. Empty until the user creates the project."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = var.laminar_project_id == "" || can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.laminar_project_id))
-    error_message = "laminar_project_id must be empty or a UUID like 42fc1e36-6c0e-4a69-9850-b0e849bb4656."
   }
 }
 

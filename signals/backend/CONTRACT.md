@@ -218,7 +218,8 @@ Temporary answers the skeleton uses for open questions (each lives in one functi
 - One event per run.
 - No `skipped` rows for sampled-out traces (the placeholder doesn't sample).
 - Fan-out not built yet; the real runner decides between poller and runner fan-out (section 4).
-- Laminar key read from `.env`; the `projects` key column holds a placeholder (section 6).
+- ~~Laminar key read from `.env`; the `projects` key column holds a placeholder (section 6).~~ Done
+  (SIG-103): keys saved on the Settings page, encrypted; `.env` is the fallback.
 
 ---
 
