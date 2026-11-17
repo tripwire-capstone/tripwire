@@ -20,6 +20,7 @@ Needs Docker and a Laminar project (Cloud or self-hosted) with some traces.
 ```bash
 cd signals/backend
 cp .env.example .env            # then fill in LMNR_PROJECT_API_KEY and OPENAI_API_KEY
+echo "TRIPWIRE_SECRET_KEY=$(openssl rand -hex 32)" >> .env   # optional: to save keys on the Settings page
 docker compose up --build
 ```
 
@@ -31,7 +32,7 @@ Compose starts, in order:
 | `seed` | One project, one signal ("User frustration") with v1, one cluster. Runs once, then exits. |
 | `poller` | Every 10 s: new finished traces from Laminar → `traces`. Looks back 24 h on its first poll. |
 | `runner` | **Placeholder.** Every 5 s: a `done` run per new trace; an event for about half of them. |
-| `clusterer` | Every 10 s: summarizes and embeds new events (OpenAI; needs `OPENAI_API_KEY` in `.env`), then groups them into clusters. `CLUSTERER_MODE=placeholder` runs a no-OpenAI stand-in. |
+| `clusterer` | Every 10 s: summarizes and embeds new events (OpenAI: the key saved on the Settings page, else `OPENAI_API_KEY` in `.env`; with neither it waits), then groups them into clusters. `CLUSTERER_MODE=placeholder` runs a no-OpenAI stand-in. |
 
 Send some traffic (park-traffic or tau-traffic) to the same Laminar project, then:
 
@@ -82,8 +83,9 @@ check.sql       "is data flowing?" report
 - **Real judge (runner):** fetch a trace's spans, render them as text, call the LLM with
   structured output, store the event and tokens/cost. Replaces the placeholder in `runner/run.py`.
 - **Real clustering:** embeddings, assign/discover, naming. Replaces `clusterer/cluster.py`.
-- **Encrypted Laminar keys:** `encrypt()`/`decrypt()` with `TRIPWIRE_SECRET_KEY`; the seed stores
-  the encrypted key, the poller decrypts per project instead of reading `.env`.
+- **Encrypted keys (done, SIG-103):** keys saved on the Settings page are encrypted with
+  `TRIPWIRE_SECRET_KEY` (`tripwire/crypto.py`); the workers look them up every loop
+  (`tripwire/project_keys.py`), falling back to `.env`.
 - **API + mock UI:** endpoints shaped like the mock's data helpers, then wire `signals/mock-ui`
   page by page (Events tab first).
 - **Migration runner:** apply new migrations without wiping the database.

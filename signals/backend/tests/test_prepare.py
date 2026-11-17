@@ -176,7 +176,8 @@ def test_a_bug_on_one_event_is_saved_as_crashed_and_the_others_still_run(conn, c
     assert worker.llm.calls == calls_before
 
 
-def test_a_crashed_event_does_not_count_as_stalled_for_the_health_check(conn):
+def test_a_crashed_event_does_not_count_as_stalled_for_the_health_check(conn, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env-openai-key-1111")   # health rules apply only with a key
     from tests.test_health import settings_for_tests
     from tripwire.clusterer.health import check_clustering
     _, version_id = add_signal(conn)

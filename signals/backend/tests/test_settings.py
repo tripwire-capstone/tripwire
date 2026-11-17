@@ -122,16 +122,15 @@ def test_load_settings_rejects_alive_window_shorter_than_one_pass():
     assert "CLUSTER_HEALTH_ALIVE_MINUTES must allow more time than one CLUSTERER_INTERVAL_SECONDS" in message
 
 
-def test_real_mode_requires_an_openai_key_and_says_how_to_opt_out():
-    message = str(pytest.raises(SettingsError, load_settings,
-                                {"DATABASE_URL": "postgresql://example/tripwire"}).value)
-    assert "OPENAI_API_KEY is required in real mode" in message
-    assert "CLUSTERER_MODE=placeholder" in message
+def test_real_mode_starts_without_an_openai_key():
+    # The key is the project's, looked up every pass (saved on the Settings page, else the env).
+    settings = load_settings({"DATABASE_URL": "postgresql://example/tripwire"})
+    assert settings.mode == "real"
 
 
 def test_placeholder_mode_runs_without_an_openai_key():
     settings = load_settings({"DATABASE_URL": "postgresql://example/tripwire", "CLUSTERER_MODE": "placeholder"})
-    assert settings.mode == "placeholder" and settings.openai_api_key is None
+    assert settings.mode == "placeholder"
 
 
 def test_the_openai_key_is_never_printed():

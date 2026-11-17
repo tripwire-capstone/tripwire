@@ -3,6 +3,7 @@
 import asyncio
 import math
 import os
+from functools import partial
 
 from ..llm import LLMBadOutput, LLMError, LLMInputTooLong, LLMRefused, LLMServiceError
 from ..llm._openai import _complete_openai
@@ -160,11 +161,14 @@ def _judge_trace(
     )
 
 
-def judge(laminar: JudgeLaminarSQL, trace: TraceRow, version: SignalVersion) -> JudgeResult:
+def judge(laminar: JudgeLaminarSQL, trace: TraceRow, version: SignalVersion, *,
+          openai_api_key: str) -> JudgeResult:
+    """`laminar` is built with the project's Laminar key and `openai_api_key` is the project's
+    OpenAI key: both looked up per run by the caller (tripwire/project_keys.py)."""
     return _judge_trace(
         laminar,
         trace,
         version,
-        complete=_complete_openai,
+        complete=partial(_complete_openai, api_key=openai_api_key),
         model_timeout=int(os.getenv("JUDGE_MODEL_TIMEOUT_SECONDS", "60")),
     )

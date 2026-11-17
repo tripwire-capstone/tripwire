@@ -27,8 +27,8 @@ import {
 import { stateBucketName } from "../terraform/tfvars.js";
 import { servicesImageFromState, withServicesImage } from "../terraform/tripwireState.js";
 import { answer, downloadingNote, step } from "../ui/ui.js";
-import { ensureLaminarKey, ensureOpenAiKey, migrationEnvironment } from "./tripwire.js";
 import { migrationTarget, runMigration } from "../aws/migrate.js";
+import { removeOldKeys } from "../aws/oldKeys.js";
 import { tripwireRows } from "../ui/tripwireRows.js";
 import { CLI_VERSION } from "../core/version.js";
 import type { DataPlan, DeployOptions, StepLabels } from "../types/commands.js";
@@ -184,7 +184,7 @@ async function startTripwire(
   });
   try {
     try {
-      await runMigration(log, config.region, migrationTarget(outputs), migrationEnvironment(config));
+      await runMigration(log, config.region, migrationTarget(outputs));
     } catch (err) {
       start = { ...start, databaseFailed: true };
       throw err;
@@ -212,6 +212,20 @@ async function startTripwire(
 }
 
 // Waits until public DNS sends the domain to the zone
+// Keys live in Tripwire → Settings, not in the deploy. A restored database brings back keys saved
+// there, so the steps only matter while Tripwire shows "Not connected yet"; the CLI can't tell from
+// here (the page is behind the login), so it always shows them.
+export const connectSteps = (config: TripwireConfig, laminarUrl: string): string =>
+  [
+    "If Tripwire says \"Not connected yet\":",
+    `1. Open ${laminarUrl} and sign in. First time: use the temporary password AWS`,
+    `   emailed to ${config.laminarUsers[0] ?? "the address you gave tripwire init"}.`,
+    "2. Create a project (or open the one your app sends traces to), and create a",
+    "   project API key in its settings.",
+    "3. Open Tripwire → Settings and add that key and your OpenAI API key.",
+    "   Signals start reading traces within a minute.",
+  ].join("\n");
+
 async function waitForDelegation(domain: string, expected: string[]): Promise<void> {
   if (sameNameServers(await publicNameServers(domain), expected)) return;
 
@@ -333,7 +347,7 @@ export async function deploy(options: DeployOptions): Promise<void> {
       `Infra    ${infra}`,
       `Data     ${data.summary}`,
       // Empty: stack ~10 min (RDS ~8), Laminar ~1.5, migration ~1, Tripwire's apply + start ~3
-      `Time     ${data.stackEmpty ? "about 16 minutes, plus a pause to connect Laminar" : "usually a few minutes"}`,
+      `Time     ${data.stackEmpty ? "about 16 minutes" : "usually a few minutes"}`,
     ].join("\n"),
     "Deploy",
   );
@@ -346,15 +360,13 @@ export async function deploy(options: DeployOptions): Promise<void> {
   }
 
   const yes = options.yes ?? false;
-  let current = await ensureOpenAiKey(log, config, yes);
-  await writeConfig(current);
 
   await applyStack(log, "bootstrap", yes, {
     title: "Preparing your AWS account",
     unchanged: null,
     live: { action: "build", stack: "bootstrap", estimate: "usually about a minute", usualSeconds: 5 * 60 },
   });
-  await deployPersistent(log, current, yes);
+  await deployPersistent(log, config, yes);
   await applyStack(log, "stack", yes, {
     title: data.stackEmpty ? "Building Laminar" : "Updating Laminar",
     unchanged: "Laminar · unchanged",
@@ -367,12 +379,15 @@ export async function deploy(options: DeployOptions): Promise<void> {
   });
   await startServices(log, config.region, LAMINAR);
 
-  // Tripwire: needs Laminar up (for its key), then its database, then its services
+  // Tripwire: its database, then its services. Its keys are added later, in Tripwire → Settings.
   let outputs = await tfOutputs(log, "stack");
-  current = await ensureLaminarKey(log, current, String(outputs.laminar_url), yes);
-  await writeConfig(current);
-  current = await startTripwire(log, current, outputs, data.restore);
+  const current = await startTripwire(log, config, outputs, data.restore);
   outputs = await tfOutputs(log, "stack");
+
+  // The keys older deploys stored in SSM: unused since keys moved to Settings (aws/oldKeys.ts).
+  // Only after the services run on task definitions that no longer name them.
+  const removed = await removeOldKeys(log, config.region);
+  if (removed.length > 0) p.log.info("Removed the OpenAI and Laminar keys earlier deploys stored in AWS: keys now live in Tripwire → Settings.");
 
   await writeConfig({
     ...current,
@@ -387,8 +402,8 @@ export async function deploy(options: DeployOptions): Promise<void> {
     ].join("\n"),
     "Deployed",
   );
+  p.note(connectSteps(config, String(outputs.laminar_url)), "Connect Tripwire");
 
-  // The temporary password was needed earlier, to sign in and create the Laminar key (tripwire.ts)
   const others = config.laminarUsers.slice(1);
   p.outro(
     data.stackEmpty && others.length > 0

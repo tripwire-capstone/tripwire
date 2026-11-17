@@ -76,7 +76,7 @@ Laminar ──► poller ──► traces ──┬─► signal_runs (pending) 
 | `JUDGE_EARLIER_TURNS` | 5 | S12 |
 | `JUDGE_FETCH_TIMEOUT_SECONDS` | 10 | S23 |
 | `JUDGE_MODEL_TIMEOUT_SECONDS` | 60 | S23 |
-| `OPENAI_API_KEY` | (required) | S16 |
+| `OPENAI_API_KEY` | (fallback) | S16. The project's key saved on the Settings page wins; looked up per run. With neither, runs wait without using an attempt |
 
 ## What other pairs read from us
 

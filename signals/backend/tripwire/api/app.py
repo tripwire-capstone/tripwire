@@ -5,7 +5,6 @@ Run: uvicorn tripwire.api.app:app --host 0.0.0.0 --port 8080
 """
 
 import logging
-import os
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -22,6 +21,7 @@ from ..judge.config import JudgeModelConfigError, configured_judge_model
 from ..judge.judge import judge
 from ..judge.types import JudgeError, SignalVersion, TraceRow
 from ..judge.laminar import JudgeLaminarSQL
+from ..project_keys import LABELS, project_key
 from .db import get_conn
 from .validate import normalize_fields, problems
 
@@ -730,7 +730,7 @@ class TestRunOut(BaseModel):
 
 TRACE_SQL = """
 SELECT t.id, t.laminar_trace_id::text, t.session_id, t.started_at, t.ended_at, t.status,
-       p.laminar_api_url
+       p.laminar_api_url, p.id
 FROM traces t
 JOIN projects p ON p.id = t.project_id
 WHERE t.laminar_trace_id = %s
@@ -759,10 +759,15 @@ def test_run(body: TestRunIn, conn=Depends(get_conn), judge_fn=Depends(get_judge
     version = SignalVersion(id=None, signal_id=None, name=body.definition.name.strip(),
                             instruction=d["instruction"], critical_guidance=d["critical_guidance"],
                             output_schema=d["output_schema"], model=d["model"])
-        # The judge's own client: deadline-bound, no retries, and the judge closes it.
-    laminar = JudgeLaminarSQL(os.environ.get("LMNR_PROJECT_API_KEY", ""), row[6])
+    # The project's keys: saved on the Settings page, else the environment's (tripwire/project_keys.py).
+    keys = {kind: project_key(conn, row[7], kind) for kind in ("laminar", "openai")}
+    missing = [LABELS[kind] for kind, key in keys.items() if key.value is None]
+    if missing:
+        raise HTTPException(503, f"No {' or '.join(missing)} key yet: add it in Settings, then test again.")
+    # The judge's own client: deadline-bound, no retries, and the judge closes it.
+    laminar = JudgeLaminarSQL(keys["laminar"].value, row[6])
     try:
-        result = judge_fn(laminar, trace, version)
+        result = judge_fn(laminar, trace, version, openai_api_key=keys["openai"].value)
     except JudgeError as e:
         raise HTTPException(503 if e.retryable else 422, f"the judge couldn't finish: {e}")
     u = result.usage

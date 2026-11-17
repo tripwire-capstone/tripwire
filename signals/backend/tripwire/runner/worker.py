@@ -9,19 +9,34 @@ import psycopg
 from ..judge.judge import judge
 from ..judge.laminar import JudgeLaminarSQL
 from ..judge.types import JudgeError
+from ..project_keys import LABELS, KeyWatch, project_key
 from . import jobs
 
 log = logging.getLogger("runner")
 
+# A run whose project has no Laminar or OpenAI key waits this long, then tries again. It doesn't use
+# an attempt, so it runs once a key is saved on the Settings page.
+MISSING_KEY_RETRY_SECONDS = 60
 
-class LaminarClients:
-    """Create a fresh Laminar client for each judgment. The judge closes it."""
 
-    def __init__(self, api_key):
-        self.api_key = api_key
+class ProjectClients:
+    """What one run needs from its project: a fresh Laminar client (the judge closes it) and the
+    OpenAI key. Keys are looked up for every run (saved on the Settings page, else the environment),
+    so a new key is used without a restart. A missing key is a JudgeError that waits and retries
+    without using an attempt; the run's last_error (shown on the Developer page) says which key."""
 
-    def get(self, api_url):
-        return JudgeLaminarSQL(self.api_key, api_url)
+    def __init__(self, watch):
+        self.watch = watch
+
+    def for_run(self, conn, project):
+        where = f"project {project.name}"
+        keys = {kind: self.watch.check(where, kind, project_key(conn, project.id, kind))
+                for kind in ("laminar", "openai")}
+        missing = [LABELS[kind] for kind, key in keys.items() if key.value is None]
+        if missing:
+            raise JudgeError(f"no {' or '.join(missing)} key: add it in Settings", retryable=True,
+                             uses_attempt=False, retry_after=MISSING_KEY_RETRY_SECONDS)
+        return JudgeLaminarSQL(keys["laminar"].value, project.laminar_api_url), keys["openai"].value
 
 
 def backoff_seconds(retry_after, age_seconds, settings, rand=random.random):
@@ -38,9 +53,10 @@ def work_once(conn, settings, clients, judge_fn=judge):
     claimed = jobs.claim(conn, settings)
     if claimed is None:
         return False
-    trace, version, api_url = jobs.load(conn, claimed.run_id)
+    trace, version, project = jobs.load(conn, claimed.run_id)
     try:
-        result = judge_fn(clients.get(api_url), trace, version)
+        laminar, openai_api_key = clients.for_run(conn, project)
+        result = judge_fn(laminar, trace, version, openai_api_key=openai_api_key)
     except JudgeError as e:
         error = e
     except Exception as e:
@@ -73,9 +89,9 @@ def record_error(conn, claimed, error, settings):
         log.warning("run %s: lease lost before recording an error; discarded", claimed.run_id)
 
 
-def worker_loop(name, database_url, api_key, settings, stop, judge_fn=judge):
+def worker_loop(name, database_url, settings, stop, watch, judge_fn=judge):
     """Keep working until `stop` is set. A lost database connection is retried, never fatal."""
-    clients = LaminarClients(api_key)
+    clients = ProjectClients(watch)
     while not stop.is_set():
         try:
             with psycopg.connect(database_url, autocommit=True) as conn:

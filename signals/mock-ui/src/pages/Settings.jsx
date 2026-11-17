@@ -34,9 +34,10 @@ const SECTIONS = [
 
 const SOURCE_BADGE = {
   saved: { label: 'Saved', color: 'teal', tip: 'Saved on this page.' },
+  // Only when running locally: on AWS there's no fallback key, so a key is saved here or not set.
   environment: {
-    label: 'From deploy', color: 'gray',
-    tip: 'Set at deploy time (or in .env when running locally). A key saved here takes its place.',
+    label: 'From .env', color: 'gray',
+    tip: 'Local fallback from .env. A key saved here takes its place.',
   },
 };
 
@@ -90,7 +91,7 @@ function KeySection({ kind, title, info, onChanged }) {
       {info.unreadable && (
         <Alert color="yellow" variant="light" icon={<IconAlertTriangle size={ICON_SIZE} />} title="The saved key can't be read">
           The server&apos;s encryption key changed since it was saved. Set the key again.
-          {info.source === 'environment' && ' Until then, the key from the deploy is used.'}
+          {info.source === 'environment' && ' Until then, the key from .env is used.'}
         </Alert>
       )}
       <Group>
@@ -227,7 +228,7 @@ function RemoveKeyModal({ kind, opened, onClose, onRemoved }) {
     <Modal opened={opened} onClose={onClose} title="Remove the saved key" centered>
       <Stack gap="md">
         <Text size="sm">
-          The key from the deploy is used again, if there is one. Without a key, signals stop until a new one is saved.
+          Running locally, the key from .env is used again, if there is one. Without a key, signals wait until a new one is saved.
         </Text>
         {error && <Alert color="red" variant="light">{error}</Alert>}
         <Group justify="flex-end">

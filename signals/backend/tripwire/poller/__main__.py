@@ -3,11 +3,12 @@
     python -m tripwire.poller            # poll every 10 s until stopped
     python -m tripwire.poller --once     # one poll of each project, then exit
 
-Settings come from env vars (or .env): DATABASE_URL, LMNR_PROJECT_API_KEY.
-Each project's Laminar address comes from its row in `projects`.
+Settings come from env vars (or .env): DATABASE_URL, and TRIPWIRE_SECRET_KEY for keys saved on
+the Settings page. Each project's Laminar address comes from its row in `projects`.
 
-TODO (encrypted keys): every project uses LMNR_PROJECT_API_KEY for now. Next step:
-decrypt projects.laminar_api_key_encrypted with TRIPWIRE_SECRET_KEY instead.
+Each project's Laminar key is looked up on every poll (tripwire/project_keys.py): the key saved on
+the Settings page, else LMNR_PROJECT_API_KEY. A key saved there is used on the next poll, with no
+restart. A project with no key is skipped (one log line, not one per poll) until a key is saved.
 """
 
 import argparse
@@ -20,6 +21,7 @@ from datetime import timedelta
 import psycopg
 from dotenv import load_dotenv
 
+from ..project_keys import KeyWatch, project_key
 from .laminar import LaminarError, LaminarSQL
 from .poll import poll_once
 
@@ -49,7 +51,7 @@ def main():
     signal.signal(signal.SIGTERM, _stop)
 
     database_url = os.environ["DATABASE_URL"]
-    api_key = os.environ["LMNR_PROJECT_API_KEY"]
+    watch = KeyWatch(log)
     lookback = timedelta(hours=args.lookback_hours)
     settle = timedelta(seconds=args.settle_seconds)
 
@@ -58,12 +60,7 @@ def main():
             try:
                 # A fresh connection per poll: nothing goes stale between polls.
                 with psycopg.connect(database_url) as conn:
-                    projects = conn.execute(
-                        "SELECT id, name, laminar_api_url FROM projects ORDER BY id").fetchall()
-                    if not projects:
-                        log.warning("no rows in projects: run the seed first")
-                    for project_id, name, api_url in projects:
-                        poll_project(conn, project_id, name, api_url, api_key, lookback, settle)
+                    poll_all(conn, watch, lookback, settle)
             except psycopg.OperationalError as e:
                 log.error("can't reach Postgres, will retry: %s", e)
             if args.once:
@@ -71,6 +68,18 @@ def main():
             time.sleep(args.interval)
     except KeyboardInterrupt:
         log.info("stopped")
+
+
+def poll_all(conn, watch, lookback, settle, poll=None):
+    """Poll every project that has a Laminar key. `poll` lets tests replace poll_project."""
+    poll = poll or poll_project
+    projects = conn.execute("SELECT id, name, laminar_api_url FROM projects ORDER BY id").fetchall()
+    if not projects:
+        log.warning("no rows in projects: run the seed first")
+    for project_id, name, api_url in projects:
+        key = watch.check(f"project {name}", "laminar", project_key(conn, project_id, "laminar"))
+        if key.value is not None:
+            poll(conn, project_id, name, api_url, key.value, lookback, settle)
 
 
 def poll_project(conn, project_id, name, api_url, api_key, lookback, settle):
