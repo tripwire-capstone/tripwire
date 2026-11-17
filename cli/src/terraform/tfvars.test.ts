@@ -75,13 +75,12 @@ test("stack leaves Tripwire's services out until a migration has succeeded", () 
   assert.doesNotMatch(out, /tripwire_services_image|laminar_project_id/);
 });
 
-test("stack gets Tripwire's services image and Laminar project once known", () => {
+test("stack gets Tripwire's services image once known, and never a Laminar project (it comes from Settings)", () => {
   const image = `ghcr.io/tripwire-capstone/tripwire-backend@sha256:${"a".repeat(64)}`;
   const out = buildTfvars("stack", {
     ...config,
-    tripwire: { servicesImage: image, laminarProjectId: "42fc1e36-6c0e-4a69-9850-b0e849bb4656", openAiKeyHint: "abcd" },
+    tripwire: { servicesImage: image },
   });
   assert.match(out, new RegExp(`^tripwire_services_image = "${image}"$`, "m"));
-  assert.match(out, /^laminar_project_id = "42fc1e36-6c0e-4a69-9850-b0e849bb4656"$/m);
-  assert.doesNotMatch(out, /abcd/);
+  assert.doesNotMatch(out, /laminar_project_id/);
 });

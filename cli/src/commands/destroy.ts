@@ -56,8 +56,8 @@ export async function destroy(options: DestroyOptions): Promise<void> {
     [
       `This deletes the stack: ${count} resources, including Laminar, Tripwire,`,
       "the database, the data box and the load balancer.",
-      "Kept: the DNS zone, the certificate, the state bucket, and Tripwire's",
-      "OpenAI and Laminar keys in SSM (reused on the next deploy).",
+      "Kept: the DNS zone, the certificate and the state bucket. Keys saved in",
+      "Tripwire → Settings are in the database snapshot and come back with it.",
       "",
       "Final snapshots of the database and data volume are taken first.",
       `Once they're ready, ${oldFinals} old final and ${scheduled} scheduled`,
@@ -104,8 +104,8 @@ export async function destroy(options: DestroyOptions): Promise<void> {
       "Kept for next time:",
       `  Snapshots from ${formatDate(rotation.keep.volume.created)}: Laminar's traces and`,
       "  Tripwire's signals, events and clusters",
-      "  Your DNS zone, HTTPS certificate, state bucket, and Tripwire's OpenAI and",
-      "  Laminar keys",
+      "  The keys saved in Tripwire → Settings (in the database snapshot)",
+      "  Your DNS zone, HTTPS certificate and state bucket",
       // Route 53 zone $0.50/month plus snapshot storage; an estimate, not a quote
       "Cost while removed: about $1/month (DNS zone + snapshot storage)",
     ].join("\n"),

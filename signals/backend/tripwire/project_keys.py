@@ -11,9 +11,12 @@ deploys that predate the Settings page working. Clearing a saved key brings the 
 A saved key that can't be decrypted (TRIPWIRE_SECRET_KEY changed or missing) is never an error
 here: it counts as not saved, so the environment key is used, and `unreadable` is True so the
 Settings page can say "set it again".
+
+Workers look keys up on every loop, so a key saved on the Settings page is used without a restart.
+They report what they found through a KeyWatch, which logs only when it changes (missing, back,
+replaced): one line, not one per loop. A restart logs the current state once more.
 """
 
-import logging
 import os
 from dataclasses import dataclass
 
@@ -21,7 +24,6 @@ from psycopg import sql
 
 from . import crypto
 
-log = logging.getLogger("project_keys")
 
 # kind -> (encrypted column, hint column, environment variable)
 KINDS = {
@@ -59,9 +61,8 @@ def resolve(kind, stored, stored_hint, environ=os.environ):
     if stored is not None:
         try:
             return ProjectKey(crypto.decrypt(stored, environ), "saved", stored_hint)
-        except (crypto.SecretKeyError, crypto.UnreadableError) as error:
-            log.warning("saved %s key ignored, using the environment instead: %s", kind, error)
-            unreadable = True
+        except (crypto.SecretKeyError, crypto.UnreadableError):
+            unreadable = True   # KeyWatch logs it once
     from_environment = environ.get(KINDS[kind][2], "").strip()
     if from_environment:
         return ProjectKey(from_environment, "environment", hint_for(from_environment), unreadable)
@@ -84,3 +85,44 @@ def clear_key(conn, project_id, kind):
         sql.SQL("UPDATE projects SET {} = NULL, {} = NULL WHERE id = %s").format(
             sql.Identifier(encrypted_column), sql.Identifier(hint_column)),
         (project_id,))
+
+
+def single_project_key(conn, kind, environ=os.environ):
+    """For a worker that isn't tied to one project (the clusterer): the project's key. There's one
+    project for now; with several, the clusterer would need each event's project key instead."""
+    row = conn.execute("SELECT id FROM projects ORDER BY id LIMIT 1").fetchone()
+    if row is None:
+        return resolve(kind, None, None, environ)
+    return project_key(conn, row[0], kind, environ)
+
+
+LABELS = {"laminar": "Laminar", "openai": "OpenAI"}
+
+
+class KeyWatch:
+    """Logs a worker's keys only when they change, so a missing key is one line, not one per loop.
+
+        watch = KeyWatch(log)
+        key = watch.check(f"project {name}", "laminar", project_key(conn, project_id, "laminar"))
+
+    Returns the key unchanged. Thread-safe enough for the runner: a duplicate line at worst.
+    """
+
+    def __init__(self, logger):
+        self._log = logger
+        self._seen = {}
+
+    def check(self, where, kind, key):
+        state = (key.source, key.hint, key.unreadable)
+        if self._seen.get((where, kind)) != state:
+            self._seen[(where, kind)] = state
+            label = LABELS[kind]
+            if key.unreadable:
+                self._log.warning("%s: the saved %s key can't be read (TRIPWIRE_SECRET_KEY changed or "
+                                  "missing): set it again in Settings", where, label)
+            if key.value is None:
+                self._log.warning("%s: no %s key: add it in Settings", where, label)
+            else:
+                origin = "saved in Settings" if key.source == "saved" else "from the environment"
+                self._log.info("%s: using the %s key %s (%s)", where, label, origin, key.hint)
+        return key

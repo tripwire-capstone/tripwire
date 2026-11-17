@@ -19,8 +19,8 @@ Settings (env):
   TRIPWIRE_DB_PASSWORD  the password to give the tripwire user
   TRIPWIRE_DB_NAME      default tripwire (also the user's name)
   PGSSLMODE             require on RDS (read by libpq itself)
-  Seed: JUDGE_DEFAULT_MODEL, LMNR_API_URL, LMNR_UI_URL, LMNR_PROJECT_ID, LMNR_PROJECT_API_KEY (only
-  its last 4 characters are stored, as the hint)
+  Seed: JUDGE_DEFAULT_MODEL, LMNR_API_URL, LMNR_UI_URL, LMNR_PROJECT_ID (no keys: they're saved
+  on the Settings page, or come from each service's environment)
 """
 
 import logging

@@ -8,10 +8,14 @@ shows unhealthy, and the message is in the logs.
 
 This is the only place defaults live; `.env.example` lists the same ones (a test checks they
 match). Defaults come from docs/clustering/DESIGN.md's settings table.
+
+The OpenAI key isn't a setting: it's the project's key (saved on the Settings page, else
+OPENAI_API_KEY), looked up on every pass (__main__.py), so real mode starts without one and
+waits until a key is saved.
 """
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .summarize import prompt_paths
 
@@ -43,8 +47,6 @@ class ClustererSettings:
     naming_model: str | None   # NAMING_MODEL: the model that names clusters; None = off (SIG-65)
     naming_rename_growth: float  # NAMING_RENAME_GROWTH: rename when members reach this x the named size
     naming_max_renames_per_pass: int  # NAMING_MAX_RENAMES_PER_PASS: 0 = no renames
-    # OPENAI_API_KEY: summarizer + embedder. Required in real mode; never printed (repr=False).
-    openai_api_key: str | None = field(default=None, repr=False)
 
 
 # name -> (default, type)
@@ -89,7 +91,6 @@ def load_settings(environ=None):
     database_url = environ.get("DATABASE_URL", "").strip()
     if not database_url:
         problems.append("DATABASE_URL is required")
-    openai_api_key = environ.get("OPENAI_API_KEY", "").strip() or None
 
     def check(condition, message):
         if not condition:
@@ -97,9 +98,6 @@ def load_settings(environ=None):
 
     mode = values["CLUSTERER_MODE"]
     check(mode in MODES, f"CLUSTERER_MODE must be one of {', '.join(MODES)}, got {mode!r}")
-    check(mode != "real" or openai_api_key,
-          "OPENAI_API_KEY is required in real mode (the summarizer and embedder call OpenAI): "
-          "set it in .env, or set CLUSTERER_MODE=placeholder to run without OpenAI")
     threshold = values["CLUSTER_ASSIGN_THRESHOLD"]
     check(0 < threshold <= 1,
           f"CLUSTER_ASSIGN_THRESHOLD must be between 0 and 1 (a cosine distance), got {threshold}")
@@ -160,5 +158,4 @@ def load_settings(environ=None):
         naming_model=naming_model,
         naming_rename_growth=values["NAMING_RENAME_GROWTH"],
         naming_max_renames_per_pass=values["NAMING_MAX_RENAMES_PER_PASS"],
-        openai_api_key=openai_api_key,
     )

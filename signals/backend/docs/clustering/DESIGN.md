@@ -52,7 +52,7 @@ Then sleep `CLUSTERER_INTERVAL_SECONDS` (default 10).
   in memory is assign → centers (if assign fails, step 5 has nothing to do).
 - **Autocommit connection**, opened fresh each pass, so each step's save commits on its own and a
   dropped connection heals next pass.
-- **`CLUSTERER_MODE`:** `real` (default, steps 1-5; needs `OPENAI_API_KEY`) or `placeholder` (the
+- **`CLUSTERER_MODE`:** `real` (default, steps 1-5; uses the project's OpenAI key, looked up every pass) or `placeholder` (the
   skeleton's fixed embeddings, no OpenAI). Step 1 is the prepare half's `Preparer.prepare_events`, built
   once in `__main__.py` and passed as `run_pass(..., prepare=...)`; `prepare_stand_in()` remains for tests.
   Switching an existing database from placeholder to real: `docker compose down -v` (placeholder vectors
@@ -112,7 +112,7 @@ responses.
 | Variable | Default | Decision |
 |---|---|---|
 | `CLUSTERER_MODE` | `real` (`placeholder` = no OpenAI) | Running the loop |
-| `OPENAI_API_KEY` | none; required in real mode | Summarizer + embedder |
+| `OPENAI_API_KEY` | none | Summarizer + embedder + naming, when no key is saved on the Settings page. Not a startup setting: looked up every pass; with no key the OpenAI steps wait and health says "waiting for an OpenAI key" (not unhealthy) |
 | `CLUSTERER_INTERVAL_SECONDS` | 10 | Q13 |
 | `CLUSTER_PREPARE_BATCH` | 50 | Q13 |
 | `CLUSTER_ASSIGN_THRESHOLD` | 0.30 (temporary until calibrated) | Q7, Q14 |
