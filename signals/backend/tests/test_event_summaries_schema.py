@@ -12,7 +12,7 @@ from tripwire.seed import seed
 @pytest.fixture
 def event_id(conn):
     """One real signal_events row, made by the seed and the placeholder runner."""
-    seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh", key_hint="abcd")
+    seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh")
     project = conn.execute("SELECT id FROM projects WHERE name = 'default'").fetchone()[0]
     trace_id = conn.execute(
         """INSERT INTO traces (project_id, laminar_trace_id, started_at, ended_at, status)

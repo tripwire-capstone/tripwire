@@ -110,8 +110,8 @@ def test_migrate_seed_from_env_seeds_once(schema_conn, monkeypatch):
     assert migrate.seed_from_env(schema_conn) is False
     row = schema_conn.execute("SELECT laminar_api_url, laminar_ui_url, laminar_api_key_hint, "
                               "laminar_project_id::text FROM projects").fetchone()
-    assert row == ("http://app-server.tripwire.internal:8000", "https://laminar.example.com", "abcd",
-                   "42fc1e36-6c0e-4a69-9850-b0e849bb4656")
+    assert row == ("http://app-server.tripwire.internal:8000", "https://laminar.example.com", None,
+                   "42fc1e36-6c0e-4a69-9850-b0e849bb4656")   # the key itself is never stored by the seed
 
 
 def test_migrate_ensure_database_creates_role_and_database_once():

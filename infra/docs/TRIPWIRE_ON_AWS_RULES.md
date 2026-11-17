@@ -22,7 +22,7 @@ Tripwire's poller / runner / clusterer ──► Laminar's API inside the VPC, R
 
 - **Path prefix.** The load balancer sends everything under `/tripwire/` to the API container. `tripwire/api/serve.py` strips the prefix, so `app.py` still sees `/api/...`. Every other path under `/tripwire/` gets the UI (the router handles it in the browser).
 - **Settings and secrets.** On AWS, settings come from the ECS task definitions in `infra/stack/tripwire.tf`, not from `.env`. Secrets come from SSM.
-- **Keys.** The OpenAI key and the Laminar project API key are asked for by `tripwire deploy` and stored in SSM. Terraform only knows their names, so the values never enter its state.
+- **Keys.** The OpenAI key and the Laminar project API key are asked for by `tripwire deploy` and stored in SSM. Terraform only knows their names, so the values never enter its state. Keys saved on Tripwire's Settings page are stored encrypted in the database instead, with `TRIPWIRE_SECRET_KEY` (generated in `infra/persistent/secrets.tf`, next to Laminar's own encryption key, so a destroy + restore can still read them).
 - **Database.** It's a separate `tripwire` database with its own `tripwire` user. Services never use the RDS master login; only the migration task does.
 
 ## What changed, by area
@@ -113,7 +113,7 @@ Put the digest into `tripwire_image` (with a comment naming the commit), commit,
 ## Known limits (for now)
 
 - **One Laminar project.** Tripwire watches the project whose key was given at deploy. Laminar's "Signals" item redirects to the same Tripwire page from any project. For more projects later, the redirect becomes `/tripwire#{path}` plus a UI route that reads the project ID.
-- **Keys are asked for by the CLI.** A settings page (OpenAI key, Laminar URL and key, Slack webhook) is planned. It needs keys stored encrypted in `projects` and the workers reading them from there.
+- **Keys are still asked for by the CLI.** The Settings page saves keys (encrypted in `projects`), but until the workers read them there (next PR), the workers use the deploy's keys. After that, the CLI stops asking.
 - **The Signals pages update on Refresh.** Only `/dev` refreshes on its own. A "new data" notice, or live updates like Laminar's Realtime toggle, is a possible follow-up.
 - **Laminar's sidebar item says "Signals" and opens in the same tab.** Renaming it or opening a new tab would need a fork of Laminar. Cmd+click opens a new tab.
 - **`tripwire destroy` keeps the two keys in SSM,** and reuses them on the next deploy.

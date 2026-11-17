@@ -28,7 +28,7 @@ locals {
   tripwire_services = {
     poller = {
       command = ["python", "-m", "tripwire.poller"]
-      secrets = ["database_url", "laminar_api_key"]
+      secrets = ["database_url", "secret_key", "laminar_api_key"]
       env     = {}
       # Exactly one copy, even during a deploy: two pollers would read the same traces
       maximum_percent         = 100
@@ -36,14 +36,14 @@ locals {
     }
     runner = {
       command                 = ["python", "-m", "tripwire.runner"]
-      secrets                 = ["database_url", "laminar_api_key", "openai_api_key"]
+      secrets                 = ["database_url", "secret_key", "laminar_api_key", "openai_api_key"]
       env                     = {}
       maximum_percent         = 200
       minimum_healthy_percent = 100
     }
     clusterer = {
       command = ["python", "-m", "tripwire.clusterer"]
-      secrets = ["database_url", "openai_api_key"]
+      secrets = ["database_url", "secret_key", "openai_api_key"]
       env     = {}
       # Exactly one copy: two clusterers would make clusters twice (CONTRACT.md)
       maximum_percent         = 100
@@ -51,9 +51,12 @@ locals {
     }
     api = {
       command = ["uvicorn", "tripwire.api.serve:app", "--host", "0.0.0.0", "--port", "8080"]
-      secrets = ["database_url", "laminar_api_key"]
+      # The OpenAI key too: test-run calls the judge, and Settings shows the key in use
+      secrets = ["database_url", "secret_key", "laminar_api_key", "openai_api_key"]
       env = {
         TRIPWIRE_BASE_PATH = "/tripwire"
+        # Settings: clearing a saved Laminar key goes back to the deploy's project
+        LMNR_PROJECT_ID = var.laminar_project_id
       }
       maximum_percent         = 200
       minimum_healthy_percent = 100
@@ -63,6 +66,7 @@ locals {
   # Secret name inside the container => where ECS reads it
   tripwire_secret_sources = {
     database_url    = { name = "DATABASE_URL", arn = aws_ssm_parameter.tripwire_database_url.arn }
+    secret_key      = { name = "TRIPWIRE_SECRET_KEY", arn = local.tripwire_secret_key_arn }
     laminar_api_key = { name = "LMNR_PROJECT_API_KEY", arn = local.tripwire_cli_secret_arn.laminar_api_key }
     openai_api_key  = { name = "OPENAI_API_KEY", arn = local.tripwire_cli_secret_arn.openai_api_key }
   }
@@ -146,7 +150,6 @@ resource "aws_ecs_task_definition" "tripwire_migrate" {
         # The master user, only here: it creates the tripwire user and database
         { name = "MASTER_DATABASE_URL", valueFrom = aws_ssm_parameter.database_url.arn },
         { name = "TRIPWIRE_DB_PASSWORD", valueFrom = aws_ssm_parameter.tripwire_db_password.arn },
-        { name = "LMNR_PROJECT_API_KEY", valueFrom = local.tripwire_cli_secret_arn.laminar_api_key },
       ]
       logConfiguration = {
         logDriver = "awslogs"

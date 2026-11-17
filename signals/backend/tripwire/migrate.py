@@ -83,11 +83,9 @@ def apply_migrations(conn, directory=MIGRATIONS_DIR):
 
 
 def seed_from_env(conn):
-    key = os.environ.get("LMNR_PROJECT_API_KEY", "")
     return seed.seed(conn,
                      api_url=os.environ["LMNR_API_URL"],
                      ui_url=os.environ["LMNR_UI_URL"],
-                     key_hint=key[-4:] if key else "none",
                      laminar_project_id=os.environ.get("LMNR_PROJECT_ID") or None)
 
 

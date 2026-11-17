@@ -127,6 +127,7 @@ data "aws_iam_policy_document" "ecs_execution_secrets" {
         aws_ssm_parameter.tripwire_database_url.arn,
         aws_ssm_parameter.tripwire_db_password.arn,
         aws_ssm_parameter.database_url.arn,
+        local.tripwire_secret_key_arn,
       ],
       values(local.tripwire_cli_secret_arn),
     )

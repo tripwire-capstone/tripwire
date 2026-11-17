@@ -8,13 +8,12 @@ No clusters: the real clusterer makes them from events. (The seed used to add a 
 "Placeholder cluster"; it showed in the UI and real assign could pick it. Placeholder clusterer
 mode now leaves every event in the pool unless a test adds a cluster itself.)
 
-Settings (env or .env): DATABASE_URL, LMNR_PROJECT_API_KEY (only its last 4 characters
-are stored, as the hint), LMNR_API_URL (default Laminar Cloud), LMNR_UI_URL,
+Settings (env or .env): DATABASE_URL, LMNR_API_URL (default Laminar Cloud), LMNR_UI_URL,
 LMNR_PROJECT_ID (optional, for "Open in Laminar" links), and JUDGE_DEFAULT_MODEL
 (required when seeding a new project).
 
-TODO (encrypted keys): the key column gets a placeholder, never the real key in plain
-text. Next step: encrypt LMNR_PROJECT_API_KEY with TRIPWIRE_SECRET_KEY and store that.
+The project starts with no saved keys: the workers use LMNR_PROJECT_API_KEY and OPENAI_API_KEY
+from their environment until someone saves keys on the Settings page (tripwire/project_keys.py).
 """
 
 import json
@@ -29,7 +28,6 @@ from .judge.config import configured_judge_model
 log = logging.getLogger("seed")
 
 PROJECT_NAME = "default"
-KEY_PLACEHOLDER = b"not-encrypted-yet"
 
 SIGNAL_NAME = "User frustration"
 INSTRUCTION = ("Flag the trace if the user shows frustration with the assistant: repeating "
@@ -38,7 +36,7 @@ OUTPUT_SCHEMA = [{"name": "reason", "type": "string",
                   "description": "Why the user seems frustrated", "nullable": False}]
 
 
-def seed(conn, *, api_url, ui_url, key_hint, laminar_project_id=None):
+def seed(conn, *, api_url, ui_url, laminar_project_id=None):
     """Insert the seed rows unless the project already exists. Returns True if it seeded."""
     with conn.transaction(), conn.cursor() as cur:
         cur.execute("SELECT 1 FROM projects WHERE name = %s", (PROJECT_NAME,))
@@ -46,10 +44,9 @@ def seed(conn, *, api_url, ui_url, key_hint, laminar_project_id=None):
             return False
         model = configured_judge_model()
         cur.execute(
-            """INSERT INTO projects (name, laminar_api_url, laminar_ui_url, laminar_project_id,
-                                     laminar_api_key_encrypted, laminar_api_key_hint)
-               VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
-            (PROJECT_NAME, api_url, ui_url, laminar_project_id or None, KEY_PLACEHOLDER, key_hint),
+            """INSERT INTO projects (name, laminar_api_url, laminar_ui_url, laminar_project_id)
+               VALUES (%s, %s, %s, %s) RETURNING id""",
+            (PROJECT_NAME, api_url, ui_url, laminar_project_id or None),
         )
         project_id = cur.fetchone()[0]
         cur.execute("INSERT INTO signals (project_id, name) VALUES (%s, %s) RETURNING id",
@@ -66,12 +63,10 @@ def seed(conn, *, api_url, ui_url, key_hint, laminar_project_id=None):
 def main():
     load_dotenv()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    key = os.environ.get("LMNR_PROJECT_API_KEY", "")
     with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
         done = seed(conn,
                     api_url=os.environ.get("LMNR_API_URL", "https://api.lmnr.ai"),
                     ui_url=os.environ.get("LMNR_UI_URL", "https://laminar.sh"),
-                    key_hint=key[-4:] if key else "none",
                     laminar_project_id=os.environ.get("LMNR_PROJECT_ID"))
     log.info("seeded project and signal" if done else "already seeded; nothing to do")
 

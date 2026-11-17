@@ -82,5 +82,8 @@ services:
     command: uvicorn tripwire.api.app:app --host 0.0.0.0 --port 8080
     ports:
       - "8080:8080"
+    # Settings checks keys against Laminar, and test-run reads traces from it: same as the poller.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 volumes:
   pgdata:
