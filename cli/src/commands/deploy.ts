@@ -25,6 +25,7 @@ import {
   writeSettings,
 } from "../terraform/terraform.js";
 import { stateBucketName } from "../terraform/tfvars.js";
+import { servicesImageFromState, withServicesImage } from "../terraform/tripwireState.js";
 import { answer, downloadingNote, step } from "../ui/ui.js";
 import { ensureLaminarKey, ensureOpenAiKey, migrationEnvironment } from "./tripwire.js";
 import { migrationTarget, runMigration } from "../aws/migrate.js";
@@ -270,8 +271,9 @@ async function planData(
 
   await tfInit(log, "stack", () => setMessage(downloadingNote("Checking for saved data")));
   setMessage("Checking for saved data");
-  if (findResource(await tfState(log, "stack"), "aws_db_instance.main")) {
-    return { stackEmpty: false, summary: "kept, the stack is running" };
+  const state = await tfState(log, "stack");
+  if (findResource(state, "aws_db_instance.main")) {
+    return { stackEmpty: false, summary: "kept, the stack is running", servicesImage: servicesImageFromState(state) };
   }
 
   const latest = latestFinal(await listSnapshots(log, config.region));
@@ -296,22 +298,25 @@ export async function deploy(options: DeployOptions): Promise<void> {
   if (!options.lite) return showModes();
 
   p.intro("tripwire deploy --lite");
-  const config = await readConfig();
-  if (!config) throw new UserError("Run `tripwire init` first.");
+  const stored = await readConfig();
+  if (!stored) throw new UserError("Run `tripwire init` first.");
 
   const log = new Log("deploy");
   await step(
     "Checking Terraform and your AWS login",
-    () => checkLogin(log, config),
-    () => `AWS account ${config.accountId}`,
+    () => checkLogin(log, stored),
+    () => `AWS account ${stored.accountId}`,
   );
 
   await syncInfra(bundledInfraDir(), deploymentDir());
-  await writeSettings(config);
+  await writeSettings(stored);
   const data = await step("Checking for saved data", (setMessage) =>
-    planData(log, config, options.fresh ?? false, setMessage),
+    planData(log, stored, options.fresh ?? false, setMessage),
   );
-  if (data.restore) await writeSettings(config, data.restore);
+  // Whether Tripwire's services exist comes from the stack's state, not the local note: services that
+  // don't exist yet are created only after the migration (startTripwire)
+  const config = withServicesImage(stored, data.servicesImage);
+  await writeSettings(config, data.restore);
 
   const last = config.lastDeploy;
   const infra = !last
