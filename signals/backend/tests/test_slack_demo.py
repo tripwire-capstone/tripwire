@@ -8,6 +8,7 @@ from cryptography.fernet import Fernet
 
 from tripwire import notifier
 from tripwire.api.slack_settings import disconnect_slack, get_slack_status, save_slack_webhook
+from tripwire.slack import SlackResult
 from tripwire.slack_demo import add_cluster, add_critical_run
 from tripwire.slack_setup import find_project
 
@@ -37,9 +38,9 @@ def project(conn):
 def sent(monkeypatch):
     messages = []
 
-    def fake_post(text, *, record_type, record_id, webhook_url=None):
-        messages.append((record_type, text, webhook_url))
-        return True
+    def fake_post(text, *, webhook_url):
+        messages.append((text, webhook_url))
+        return SlackResult(ok=True)
 
     monkeypatch.setattr(notifier, "post_slack", fake_post)
     return messages
@@ -56,10 +57,10 @@ def test_demo_rows_are_sent_once_after_connecting(conn, project, sent):
     notifier.poll_once(conn, cipher, Event())
     notifier.poll_once(conn, cipher, Event())
 
-    assert [(kind, url) for kind, _, url in sent] == [("critical_run", WEBHOOK), ("new_cluster", WEBHOOK)]
-    assert "1 critical event" in sent[0][1]
-    assert "The user repeats their email" in sent[1][1]
-    assert "3 events" in sent[1][1]
+    assert [url for _, url in sent] == [WEBHOOK, WEBHOOK]
+    assert "*Critical*" in sent[0][0] and "credit card" in sent[0][0]
+    assert "*New cluster*" in sent[1][0] and "The user repeats their email" in sent[1][0]
+    assert "3 findings in 2 conversations" in sent[1][0]
     assert get_slack_status(conn, project)["verified_at"] is not None
 
 

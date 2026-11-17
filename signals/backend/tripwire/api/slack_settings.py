@@ -6,11 +6,21 @@ from ..slack import parse_slack_webhook_url
 
 
 def get_slack_status(conn, project_id: int) -> dict:
-    enabled_at, verified_at = conn.execute(
+    """Whether Slack is connected, and how alerts since connecting have gone."""
+    enabled_at, verified_at, sent, retrying, failed, last_error, last_failed_at = conn.execute(
         """
-        SELECT slack_enabled_at, slack_verified_at
-        FROM projects
-        WHERE id = %s
+        SELECT p.slack_enabled_at, p.slack_verified_at,
+               count(*) FILTER (WHERE a.status = 'sent'),
+               count(*) FILTER (WHERE a.status = 'pending'),
+               count(*) FILTER (WHERE a.status = 'failed'),
+               (array_agg(a.last_error ORDER BY a.attempted_at DESC)
+                    FILTER (WHERE a.status = 'failed'))[1],
+               max(a.attempted_at) FILTER (WHERE a.status = 'failed')
+        FROM projects AS p
+        LEFT JOIN slack_notification_attempts AS a
+               ON a.project_id = p.id AND a.attempted_at >= p.slack_enabled_at
+        WHERE p.id = %s
+        GROUP BY p.id
         """,
         (project_id,),
     ).fetchone()
@@ -19,6 +29,11 @@ def get_slack_status(conn, project_id: int) -> dict:
         "configured": enabled_at is not None,
         "enabled_at": enabled_at,
         "verified_at": verified_at,
+        "sent": sent,
+        "retrying": retrying,
+        "failed": failed,
+        "last_error": last_error,
+        "last_failed_at": last_failed_at,
     }
 
 

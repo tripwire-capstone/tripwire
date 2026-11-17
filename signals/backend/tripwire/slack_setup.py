@@ -43,7 +43,13 @@ def describe(status: dict) -> str:
     if not status["configured"]:
         return "Slack: not connected"
     verified = status["verified_at"] or "not yet (no message delivered since connecting)"
-    return f"Slack: connected since {status['enabled_at']}\nFirst delivery: {verified}"
+    lines = [f"Slack: connected since {status['enabled_at']}", f"First delivery: {verified}"]
+    if "sent" in status:  # alerts since connecting (only status reads these)
+        lines.append(f"Alerts: {status['sent']} sent, {status['retrying']} waiting to retry, "
+                     f"{status['failed']} failed")
+        if status["failed"]:
+            lines.append(f"Last failure: {status['last_failed_at']}: {status['last_error']}")
+    return "\n".join(lines)
 
 
 def main(argv=None):
