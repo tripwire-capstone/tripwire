@@ -598,6 +598,117 @@ def list_clusters(signal_id: int, since: datetime | None = None, until: datetime
     return ClusterList(**totals, clusters=[ClusterOut(**r) for r in rows(conn, CLUSTERS_SQL, params)])
 
 
+# ------------------------------------------------------------------ one cluster
+
+class ClusterSummaryOut(BaseModel):
+    event_id: int
+    summary: str
+    cause: str | None
+
+
+class ClusterExample(BaseModel):
+    id: int
+    severity: str
+    payload: dict
+    evidence_labels: list[str]
+    analysis: str | None          # the judge's reasoning for the whole run, which can hold up to 5 events
+    summary: str | None           # the clusterer's one-sentence summary; None until it's done
+    cause: str | None
+    laminar_trace_id: str
+    session_id: str | None
+    trace_ended_at: datetime
+    laminar_url: str | None
+
+
+class ClusterDetail(BaseModel):
+    id: int
+    name: str | None
+    signal_id: int
+    signal_name: str
+    events: int                   # every event in the cluster, whatever its time
+    problem_events: int
+    conversations: int            # distinct sessions; a trace without a session counts as its own
+    first_event_at: datetime
+    last_event_at: datetime
+    summaries: list[ClusterSummaryOut]   # most typical first
+    examples: list[ClusterExample]
+
+
+MAX_SUMMARIES = 20
+MAX_EXAMPLES = 10
+# Members considered when picking summaries and examples, closest to the center first. A cluster
+# bigger than this still counts every event; only the picks come from its most typical members.
+MEMBERS_CONSIDERED = 500
+
+CONVERSATION = "coalesce(t.session_id, 'trace:' || t.laminar_trace_id::text)"
+
+CLUSTER_SQL = f"""
+SELECT c.id, c.name, s.id AS signal_id, s.name AS signal_name, count(*) AS events,
+       count(*) FILTER (WHERE e.severity IN ('warning', 'critical')) AS problem_events,
+       count(DISTINCT {CONVERSATION}) AS conversations,
+       min(t.ended_at) AS first_event_at, max(t.ended_at) AS last_event_at
+FROM clusters c
+JOIN signals s ON s.id = c.signal_id
+JOIN cluster_members cm ON cm.cluster_id = c.id
+JOIN signal_events e ON e.id = cm.event_id
+JOIN traces t ON t.id = e.trace_id
+WHERE c.id = %(cluster)s AND {leaf_cluster("c")}
+GROUP BY c.id, c.name, s.id, s.name
+"""
+
+# Closest to the cluster's current center first; the distance stored when the event joined is the
+# fallback while a center is missing.
+CLUSTER_MEMBERS_SQL = f"""
+SELECT e.id, e.severity, e.payload, e.evidence_labels, r.analysis, es.summary, es.cause,
+       t.laminar_trace_id::text AS laminar_trace_id, t.session_id, t.ended_at AS trace_ended_at,
+       {CONVERSATION} AS conversation
+FROM cluster_members cm
+JOIN clusters c ON c.id = cm.cluster_id
+JOIN event_embeddings ee ON ee.event_id = cm.event_id
+JOIN signal_events e ON e.id = cm.event_id
+JOIN signal_runs r ON r.id = e.run_id
+JOIN traces t ON t.id = e.trace_id
+LEFT JOIN event_summaries es ON es.event_id = e.id AND es.status = 'done'
+WHERE cm.cluster_id = %(cluster)s
+ORDER BY ee.embedding <=> c.centroid NULLS LAST, cm.distance NULLS LAST, e.id
+LIMIT {MEMBERS_CONSIDERED}
+"""
+
+
+def pick_examples(members, count):
+    """`count` members, closest first, spread over conversations: first the closest member of each
+    conversation not yet picked, then, once every conversation has one, the closest of the rest."""
+    picked, seen = [], set()
+    for member in members:
+        if len(picked) == count:
+            return picked
+        if member["conversation"] not in seen:
+            picked.append(member)
+            seen.add(member["conversation"])
+    for member in members:
+        if len(picked) == count:
+            break
+        if member not in picked:
+            picked.append(member)
+    return sorted(picked, key=members.index)
+
+
+@app.get("/api/clusters/{cluster_id}", response_model=ClusterDetail)
+def get_cluster(cluster_id: int, examples: int = Query(3, ge=1, le=MAX_EXAMPLES), conn=Depends(get_conn)):
+    """One cluster: its counts over all time, its events' summaries and a few example events."""
+    found = rows(conn, CLUSTER_SQL, {"cluster": cluster_id})
+    if not found:
+        raise HTTPException(404, "cluster not found")
+    link = laminar_links(conn)
+    members = rows(conn, CLUSTER_MEMBERS_SQL, {"cluster": cluster_id})
+    summaries = [ClusterSummaryOut(event_id=m["id"], summary=m["summary"], cause=m["cause"])
+                 for m in members if m["summary"]][:MAX_SUMMARIES]
+    return ClusterDetail(
+        **found[0], summaries=summaries,
+        examples=[ClusterExample(**m, laminar_url=link(m["laminar_trace_id"]))
+                  for m in pick_examples(members, examples)])
+
+
 # ------------------------------------------------------------------ Home
 
 class SignalCost(BaseModel):

@@ -52,3 +52,11 @@ output "laminar_grpc_endpoint" {
   description = "Where SDKs send traces over gRPC. Port 8443 is their default, so setting the base URL is enough."
   value       = "https://${local.laminar_domain}:8443"
 }
+output "mcp_cognito_settings" {
+  description = "Settings that turn on the MCP server's Cognito login (MCP_COGNITO_* in the backend's .env)."
+  value = {
+    MCP_COGNITO_REGION       = var.region
+    MCP_COGNITO_USER_POOL_ID = aws_cognito_user_pool.main.id
+    MCP_COGNITO_CLIENT_ID    = aws_cognito_user_pool_client.mcp.id
+  }
+}
