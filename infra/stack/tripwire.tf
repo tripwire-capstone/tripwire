@@ -292,6 +292,36 @@ resource "aws_lb_listener_rule" "tripwire" {
   }
 }
 
+# Laminar's "Signals" sidebar item (turned on by SIGNALS_ENABLED in ecs.tf) leads to Tripwire: its page
+# is an enterprise-only stub in the open-source build. Covers clicks and typed URLs; Laminar's image is
+# unchanged. Laminar switches pages in the browser, so a click first fetches this path in the
+# background; Next.js treats the redirected, non-Next response as a full page load of /tripwire/signals.
+resource "aws_lb_listener_rule" "tripwire_from_laminar_signals" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 24 # before Tripwire's rule (25) and Laminar's catch-all (30)
+
+  action {
+    type = "redirect"
+
+    redirect {
+      path        = "/tripwire/signals" # the Signals list (signals/mock-ui/src/App.jsx route /signals)
+      status_code = "HTTP_302"          # temporary: the route belongs to Laminar and may change upstream
+    }
+  }
+
+  condition {
+    host_header {
+      values = [local.laminar_domain]
+    }
+  }
+
+  condition {
+    path_pattern {
+      values = ["/project/*/signals", "/project/*/signals/*"]
+    }
+  }
+}
+
 resource "aws_vpc_security_group_ingress_rule" "tripwire_from_alb" {
   security_group_id            = aws_security_group.app.id
   description                  = "Tripwire API and UI from the load balancer"

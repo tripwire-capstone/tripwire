@@ -45,7 +45,12 @@ locals {
     BETTER_AUTH_URL            = local.laminar_url
     NEXT_PUBLIC_URL            = local.laminar_url
     LAMINAR_TELEMETRY_DISABLED = "true"
-    DATABASE_SSL_ROOT_CERT     = data.http.rds_ca.response_body
+
+    # Shows Laminar's own "Signals" sidebar item (frontend lib/features/features.ts in v0.3.3: on
+    # self-hosted it needs only this). Its page is an enterprise-only stub in the open-source build,
+    # so the load balancer redirects it to Tripwire (aws_lb_listener_rule.tripwire_from_laminar_signals).
+    SIGNALS_ENABLED        = "true"
+    DATABASE_SSL_ROOT_CERT = data.http.rds_ca.response_body
 
     # The frontend runs the ClickHouse migrations, and its migration tool leaks one pooled
     # connection per statement; with the default pool of 10 every tenth statement waits 30 s.
