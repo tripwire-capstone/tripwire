@@ -122,7 +122,7 @@ responses.
 | `CLUSTER_HEALTH_STALL_MINUTES` | 15 | Q12 |
 | `CLUSTER_HEALTH_FAILURE_RUN` | 10 | Q12 |
 | `SUMMARIZER_MODEL` | `gpt-6-luna` | Q3, Q4; summarizer below |
-| `SUMMARIZER_PROMPT_VERSION` | 1 (needs `prompts/summarize_v1.md` + `.schema.json`) | summarizer below |
+| `SUMMARIZER_PROMPT_VERSION` | 4 (needs `prompts/summarize_v4.md` + `.schema.json`; v4 adds `details`) | summarizer below |
 | `CLUSTER_HEALTH_ALIVE_MINUTES` | 3 | Q12 (`--alive`) |
 | `CLUSTERER_LAST_PASS_FILE` | `/tmp/clusterer-last-pass` | Q12 (`--alive`) |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` (1536 dims, one model only) | existing |

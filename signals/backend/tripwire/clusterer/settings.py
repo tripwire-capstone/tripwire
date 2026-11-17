@@ -54,7 +54,7 @@ DEFAULTS = {
     "CLUSTER_POOL_WINDOW_DAYS": (14, int),
     "STUB_CLUSTER_RATE": (0.5, float),
     "SUMMARIZER_MODEL": ("gpt-6-luna", str),
-    "SUMMARIZER_PROMPT_VERSION": (1, int),
+    "SUMMARIZER_PROMPT_VERSION": (4, int),
     "CLUSTER_HEALTH_STALL_MINUTES": (15, int),
     "CLUSTER_HEALTH_FAILURE_RUN": (10, int),
     "CLUSTER_HEALTH_ALIVE_MINUTES": (3.0, float),
