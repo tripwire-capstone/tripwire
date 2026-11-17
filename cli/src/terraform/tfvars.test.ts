@@ -70,3 +70,18 @@ test("backend.hcl points at the state bucket", () => {
       'bucket = "tripwire-tfstate-123456789012-us-east-1"\nregion = "us-east-1"\n',
   );
 });
+test("stack leaves Tripwire's services out until a migration has succeeded", () => {
+  const out = buildTfvars("stack", config);
+  assert.doesNotMatch(out, /tripwire_services_image|laminar_project_id/);
+});
+
+test("stack gets Tripwire's services image and Laminar project once known", () => {
+  const image = `ghcr.io/tripwire-capstone/tripwire-backend@sha256:${"a".repeat(64)}`;
+  const out = buildTfvars("stack", {
+    ...config,
+    tripwire: { servicesImage: image, laminarProjectId: "42fc1e36-6c0e-4a69-9850-b0e849bb4656", openAiKeyHint: "abcd" },
+  });
+  assert.match(out, new RegExp(`^tripwire_services_image = "${image}"$`, "m"));
+  assert.match(out, /^laminar_project_id = "42fc1e36-6c0e-4a69-9850-b0e849bb4656"$/m);
+  assert.doesNotMatch(out, /abcd/);
+});

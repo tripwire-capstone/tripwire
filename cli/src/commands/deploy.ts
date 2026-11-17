@@ -4,7 +4,7 @@ import { bucketExists } from "../terraform/bootstrap.js";
 import { checkLogin } from "../aws/checks.js";
 import { readConfig, writeConfig } from "../core/config.js";
 import { publicNameServers, sameNameServers } from "../aws/dns.js";
-import { startupRows, trackStartup, waitForLaminar } from "../aws/ecs.js";
+import { LAMINAR, TRIPWIRE, startupRows, trackStartup, waitForServices } from "../aws/ecs.js";
 import { UserError } from "../core/errors.js";
 import { syncInfra } from "../terraform/infra.js";
 import { bundledInfraDir, deploymentDir } from "../core/paths.js";
@@ -25,15 +25,21 @@ import {
   writeSettings,
 } from "../terraform/terraform.js";
 import { stateBucketName } from "../terraform/tfvars.js";
+import { servicesImageFromState, withServicesImage } from "../terraform/tripwireState.js";
 import { answer, downloadingNote, step } from "../ui/ui.js";
+import { ensureLaminarKey, ensureOpenAiKey, migrationEnvironment } from "./tripwire.js";
+import { migrationTarget, runMigration } from "../aws/migrate.js";
+import { tripwireRows } from "../ui/tripwireRows.js";
 import { CLI_VERSION } from "../core/version.js";
 import type { DataPlan, DeployOptions, StepLabels } from "../types/commands.js";
 import type { TripwireConfig } from "../types/config.js";
-import type { ServiceProgress } from "../types/ecs.js";
+import type { ServiceProgress, ServiceSet } from "../types/ecs.js";
 import type { Block } from "../types/progress.js";
-import type { Plan, StackName } from "../types/terraform.js";
+import type { Plan, Restore, StackName } from "../types/terraform.js";
+import type { TripwireStart } from "../types/tripwire.js";
 
-const LITE_PRICE = "about $135/mo in us-east-1, plus usage";
+// Laminar about $135, Tripwire's four services about $37 (Fargate, us-east-1)
+const LITE_PRICE = "about $172/mo in us-east-1, plus usage and OpenAI calls";
 
 function showModes(): void {
   console.log("Choose a mode:\n");
@@ -107,20 +113,96 @@ async function applyStack(
   spin.stop(labels.title);
 }
 
-// "Starting Laminar", with a live line per service
-async function startLaminar(log: Log, region: string): Promise<void> {
+// "Starting Laminar" / "Starting Tripwire", with a live line per service
+async function startServices(log: Log, region: string, set: ServiceSet): Promise<void> {
   const startedAt = Date.now();
   let tracked: Record<string, ServiceProgress> = {};
   let status: Block["status"] = "running";
   const display = showProgress(() => {
     const now = Date.now();
-    return { title: "Starting Laminar", status, seconds: (now - startedAt) / 1000, rows: startupRows(tracked, startedAt, now) };
+    return {
+      title: `Starting ${set.product}`,
+      status,
+      seconds: (now - startedAt) / 1000,
+      rows: startupRows(tracked, startedAt, now, set),
+    };
   });
   try {
-    await waitForLaminar(log, region, (update) => {
-      tracked = trackStartup(tracked, update, Date.now());
+    await waitForServices(log, region, set, (update) => {
+      tracked = trackStartup(tracked, update, Date.now(), set.services);
     });
     status = "done";
+  } catch (err) {
+    status = "failed";
+    throw err;
+  } finally {
+    display.stop();
+  }
+}
+
+// Gives Tripwire's services a new image: plan, check nothing loses data, apply. No display of its own:
+// it runs inside "Starting Tripwire" and takes seconds (task definitions and services only).
+async function applyServicesImage(log: Log): Promise<void> {
+  const changed = await tfPlan(log, "stack");
+  if (!changed) {
+    await discardPlan("stack");
+    return;
+  }
+  const losses = dataLosses(await tfPlanJson(log, "stack"));
+  if (losses.length > 0) {
+    await discardPlan("stack");
+    throw new UserError(`Updating Tripwire would replace ${losses.join(", ")} and lose its data. Stopped.`);
+  }
+  try {
+    await tfApply(log, "stack");
+  } catch (err) {
+    if (err instanceof CommandError) throw new CommandError(withHint(err.message, HINT), err.stderr);
+    throw err;
+  }
+}
+
+// "Starting Tripwire": the database (migration task), then the services on the new image.
+// Dashboard and Backend wait while the database step runs. Returns the config with the image saved.
+async function startTripwire(
+  log: Log,
+  config: TripwireConfig,
+  outputs: Record<string, unknown>,
+  restore: Restore | undefined,
+): Promise<TripwireConfig> {
+  let start: TripwireStart = { stage: "database", startedAt: Date.now() };
+  let tracked: Record<string, ServiceProgress> = {};
+  let status: Block["status"] = "running";
+  let current = config;
+  const display = showProgress(() => {
+    const now = Date.now();
+    return {
+      title: "Starting Tripwire",
+      status,
+      seconds: (now - start.startedAt) / 1000,
+      rows: tripwireRows(start, tracked, now),
+    };
+  });
+  try {
+    try {
+      await runMigration(log, config.region, migrationTarget(outputs), migrationEnvironment(config));
+    } catch (err) {
+      start = { ...start, databaseFailed: true };
+      throw err;
+    }
+    start = { ...start, stage: "services", databaseDoneAt: Date.now() };
+
+    const image = String(outputs.tripwire_image);
+    if (current.tripwire?.servicesImage !== image) {
+      current = { ...current, tripwire: { ...current.tripwire, servicesImage: image } };
+      await writeSettings(current, restore);
+      await applyServicesImage(log);
+      await writeConfig(current);
+    }
+    await waitForServices(log, config.region, TRIPWIRE, (update) => {
+      tracked = trackStartup(tracked, update, Date.now(), TRIPWIRE.services);
+    });
+    status = "done";
+    return current;
   } catch (err) {
     status = "failed";
     throw err;
@@ -189,8 +271,9 @@ async function planData(
 
   await tfInit(log, "stack", () => setMessage(downloadingNote("Checking for saved data")));
   setMessage("Checking for saved data");
-  if (findResource(await tfState(log, "stack"), "aws_db_instance.main")) {
-    return { stackEmpty: false, summary: "kept, the stack is running" };
+  const state = await tfState(log, "stack");
+  if (findResource(state, "aws_db_instance.main")) {
+    return { stackEmpty: false, summary: "kept, the stack is running", servicesImage: servicesImageFromState(state) };
   }
 
   const latest = latestFinal(await listSnapshots(log, config.region));
@@ -215,22 +298,25 @@ export async function deploy(options: DeployOptions): Promise<void> {
   if (!options.lite) return showModes();
 
   p.intro("tripwire deploy --lite");
-  const config = await readConfig();
-  if (!config) throw new UserError("Run `tripwire init` first.");
+  const stored = await readConfig();
+  if (!stored) throw new UserError("Run `tripwire init` first.");
 
   const log = new Log("deploy");
   await step(
     "Checking Terraform and your AWS login",
-    () => checkLogin(log, config),
-    () => `AWS account ${config.accountId}`,
+    () => checkLogin(log, stored),
+    () => `AWS account ${stored.accountId}`,
   );
 
   await syncInfra(bundledInfraDir(), deploymentDir());
-  await writeSettings(config);
+  await writeSettings(stored);
   const data = await step("Checking for saved data", (setMessage) =>
-    planData(log, config, options.fresh ?? false, setMessage),
+    planData(log, stored, options.fresh ?? false, setMessage),
   );
-  if (data.restore) await writeSettings(config, data.restore);
+  // Whether Tripwire's services exist comes from the stack's state, not the local note: services that
+  // don't exist yet are created only after the migration (startTripwire)
+  const config = withServicesImage(stored, data.servicesImage);
+  await writeSettings(config, data.restore);
 
   const last = config.lastDeploy;
   const infra = !last
@@ -246,7 +332,8 @@ export async function deploy(options: DeployOptions): Promise<void> {
       `Mode     Lite, ${LITE_PRICE}`,
       `Infra    ${infra}`,
       `Data     ${data.summary}`,
-      `Time     ${data.stackEmpty ? "about 12 minutes" : "usually a few minutes"}`,
+      // Empty: stack ~10 min (RDS ~8), Laminar ~1.5, migration ~1, Tripwire's apply + start ~3
+      `Time     ${data.stackEmpty ? "about 16 minutes, plus a pause to connect Laminar" : "usually a few minutes"}`,
     ].join("\n"),
     "Deploy",
   );
@@ -259,12 +346,15 @@ export async function deploy(options: DeployOptions): Promise<void> {
   }
 
   const yes = options.yes ?? false;
+  let current = await ensureOpenAiKey(log, config, yes);
+  await writeConfig(current);
+
   await applyStack(log, "bootstrap", yes, {
     title: "Preparing your AWS account",
     unchanged: null,
     live: { action: "build", stack: "bootstrap", estimate: "usually about a minute", usualSeconds: 5 * 60 },
   });
-  await deployPersistent(log, config, yes);
+  await deployPersistent(log, current, yes);
   await applyStack(log, "stack", yes, {
     title: data.stackEmpty ? "Building Laminar" : "Updating Laminar",
     unchanged: "Laminar · unchanged",
@@ -275,27 +365,34 @@ export async function deploy(options: DeployOptions): Promise<void> {
       usualSeconds: 15 * 60,
     },
   });
-  await startLaminar(log, config.region);
+  await startServices(log, config.region, LAMINAR);
 
-  const outputs = await tfOutputs(log, "stack");
+  // Tripwire: needs Laminar up (for its key), then its database, then its services
+  let outputs = await tfOutputs(log, "stack");
+  current = await ensureLaminarKey(log, current, String(outputs.laminar_url), yes);
+  await writeConfig(current);
+  current = await startTripwire(log, current, outputs, data.restore);
+  outputs = await tfOutputs(log, "stack");
+
   await writeConfig({
-    ...config,
+    ...current,
     lastDeploy: { mode: "lite", cliVersion: CLI_VERSION, at: new Date().toISOString() },
   });
 
   p.note(
     [
-      `Laminar  ${outputs.laminar_url}`,
-      `Log      ${log.path}`,
+      `Tripwire  ${outputs.tripwire_url}`,
+      `Laminar   ${outputs.laminar_url}`,
+      `Log       ${log.path}`,
     ].join("\n"),
     "Deployed",
   );
 
-  const emails = config.laminarUsers.join(", ");
+  // The temporary password was needed earlier, to sign in and create the Laminar key (tripwire.ts)
+  const others = config.laminarUsers.slice(1);
   p.outro(
-    data.stackEmpty
-      ? `Check your email: ${emails} you should have received ` +
-          "temporary login credentials from AWS."
-      : "Done.",
+    data.stackEmpty && others.length > 0
+      ? `Done. Tripwire uses the same login as Laminar. ${others.join(", ")} also got AWS's email with a temporary password.`
+      : "Done. Tripwire uses the same login as Laminar.",
   );
 }

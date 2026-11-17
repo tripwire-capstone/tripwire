@@ -12,7 +12,12 @@
 # dev view: is data flowing? Once the UI runs, open http://localhost:5174/dev.
 
 x-backend: &backend
-  build: .
+  # The Dockerfile's build context is signals/ (it can also build the UI for AWS); locally only the
+  # backend stage is built, so no Node build happens here.
+  build:
+    context: ..
+    dockerfile: backend/Dockerfile
+    target: backend
   env_file: .env
   environment:
     DATABASE_URL: postgresql://tripwire:tripwire@db:5432/tripwire

@@ -3,7 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tripwire (mock)</title>
+    <!-- The app's prefix. "/" here; the API container rewrites it (e.g. "/tripwire/") when it
+         serves the built page, see src/basePath.js. -->
+    <base href="/" />
+    <!-- Relative paths resolve against <base>, so these stay under /tripwire/ on AWS instead of the
+         browser falling back to the host's /favicon.ico (Laminar's). Logo kit 90 (sneaker), on its
+         cream tile so it shows on dark tab bars. -->
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <title>Tripwire</title>
   </head>
   <body>
     <div id="root"></div>
