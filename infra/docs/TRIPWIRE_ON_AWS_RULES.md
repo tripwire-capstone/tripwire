@@ -22,7 +22,7 @@ Tripwire's poller / runner / clusterer ──► Laminar's API inside the VPC, R
 
 - **Path prefix.** The load balancer sends everything under `/tripwire/` to the API container. `tripwire/api/serve.py` strips the prefix, so `app.py` still sees `/api/...`. Every other path under `/tripwire/` gets the UI (the router handles it in the browser).
 - **Settings and secrets.** On AWS, settings come from the ECS task definitions in `infra/stack/tripwire.tf`, not from `.env`. Secrets come from SSM.
-- **Keys.** The OpenAI key and the Laminar project API key are asked for by `tripwire deploy` and stored in SSM. Terraform only knows their names, so the values never enter its state. Keys saved on Tripwire's Settings page are stored encrypted in the database instead, with `TRIPWIRE_SECRET_KEY` (generated in `infra/persistent/secrets.tf`, next to Laminar's own encryption key, so a destroy + restore can still read them).
+- **Keys.** The OpenAI key and the Laminar project API key are added by the user in Tripwire → Settings, after the deploy. They're stored encrypted in Tripwire's database with `TRIPWIRE_SECRET_KEY` (generated in `infra/persistent/secrets.tf`, next to Laminar's own encryption key, so a destroy + restore can still read them). The deploy doesn't ask for them, and they never touch Terraform. The poller, runner and clusterer look them up on every loop, so a key saved there is used without a restart.
 - **Database.** It's a separate `tripwire` database with its own `tripwire` user. Services never use the RDS master login; only the migration task does.
 
 ## What changed, by area
@@ -36,20 +36,19 @@ Tripwire's poller / runner / clusterer ──► Laminar's API inside the VPC, R
 | Image | `signals/backend/Dockerfile`, `signals/.dockerignore`, `compose.yaml` | The Dockerfile's build context is now `signals/`. Its stages are `ui` (Node build), `backend` (Python) and `full` (published). Compose builds only `backend`, so no Node build locally |
 | Terraform | `infra/stack/tripwire.tf` | Four services (created only once a migration has succeeded); the migration task definition; the database URL and password in SSM; the load balancer rule for `/tripwire`; the Laminar Signals redirect; the clusterer's `--alive` health check; alarms |
 | | `infra/stack/variables.tf`, `ecs.tf`, `outputs.tf` | `tripwire_image` (the published image, pinned by digest); permission to read Tripwire's secrets; `SIGNALS_ENABLED=true` on Laminar's frontend; outputs the CLI reads |
-| CLI | `cli/src/commands/tripwire.ts`, `deploy.ts`, `aws/secrets.ts`, `aws/keys.ts`, `aws/migrate.ts`, `ui/tripwireRows.ts` | The key prompts, the migration task, the second apply, and the "Starting Tripwire" display |
+| CLI | `cli/src/commands/deploy.ts`, `aws/migrate.ts`, `aws/oldKeys.ts`, `ui/tripwireRows.ts` | The migration task, the second apply, the "Starting Tripwire" display, the "Connect Tripwire" steps at the end, and deleting the two keys older deploys stored in SSM |
 
 ## What `tripwire deploy --lite` does
 
-1. Asks for the **OpenAI key** if SSM doesn't have it, checks it, and stores it.
-2. Builds or updates the AWS stack (bootstrap, persistent, stack), including Tripwire's database credentials, migration task and load balancer rules. It doesn't create the services yet.
-3. **Starting Laminar.**
-4. **Connect Tripwire to Laminar**, only if SSM has no key yet: the user signs in to Laminar, creates a project and an API key, and pastes the project URL and the key. The CLI checks the key with one query, then stores it.
-5. **Starting Tripwire**:
+1. Builds or updates the AWS stack (bootstrap, persistent, stack), including Tripwire's database credentials, migration task and load balancer rules. It doesn't create the services yet.
+2. **Starting Laminar.**
+3. **Starting Tripwire**:
    - **Database:** the migration task runs once and must succeed.
    - **Then the services:** a second, quiet apply moves them to the new image, and the CLI waits for **Dashboard** (the API) and **Backend** (poller, runner, clusterer) to run.
-6. Shows both URLs (Tripwire and Laminar).
+4. Deletes the two keys older deploys stored in SSM, if they're still there (once).
+5. Shows both URLs, then **Connect Tripwire**: sign in to Laminar, create a project API key, and add it and an OpenAI key in Tripwire → Settings. Until then Tripwire shows "Not connected yet" and the workers wait (no crash, no alarm).
 
-A failed migration stops the deploy before the services change. Rerunning `tripwire deploy --lite` is safe: saved keys are skipped and the migration only applies what's new.
+A failed migration stops the deploy before the services change. Rerunning `tripwire deploy --lite` is safe: the migration only applies what's new, and keys saved in Settings stay in the database.
 
 ## Rules
 
@@ -113,7 +112,7 @@ Put the digest into `tripwire_image` (with a comment naming the commit), commit,
 ## Known limits (for now)
 
 - **One Laminar project.** Tripwire watches the project whose key was given at deploy. Laminar's "Signals" item redirects to the same Tripwire page from any project. For more projects later, the redirect becomes `/tripwire#{path}` plus a UI route that reads the project ID.
-- **Keys are still asked for by the CLI.** Keys saved on the Settings page win: the poller, runner, clusterer and test-run look them up on every loop, with no restart, and fall back to the deploy's keys from SSM. The next step is the CLI no longer asking.
+- **Keys after a `--fresh` deploy.** A deploy that restores the final snapshot brings the saved keys back. A `--fresh` deploy starts with an empty database, so the keys are added in Settings again.
 - **The Signals pages update on Refresh.** Only `/dev` refreshes on its own. A "new data" notice, or live updates like Laminar's Realtime toggle, is a possible follow-up.
 - **Laminar's sidebar item says "Signals" and opens in the same tab.** Renaming it or opening a new tab would need a fork of Laminar. Cmd+click opens a new tab.
-- **`tripwire destroy` keeps the two keys in SSM,** and reuses them on the next deploy.
+- **One OpenAI key for clustering.** The clusterer uses the (single) project's OpenAI key; several projects would need a key per event's project.

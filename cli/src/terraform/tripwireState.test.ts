@@ -53,9 +53,9 @@ test("servicesImageFromState is undefined for an empty or unreadable state", () 
 });
 
 test("withServicesImage replaces a stale local note with the stack's answer", () => {
-  const stale = { ...config, tripwire: { servicesImage: "old", laminarProjectId: "p", openAiKeyHint: "abcd" } };
-  assert.deepEqual(withServicesImage(stale, undefined).tripwire, { laminarProjectId: "p", openAiKeyHint: "abcd" });
-  assert.deepEqual(withServicesImage(stale, IMAGE).tripwire, { servicesImage: IMAGE, laminarProjectId: "p", openAiKeyHint: "abcd" });
+  const stale = { ...config, tripwire: { servicesImage: "old" } };
+  assert.deepEqual(withServicesImage(stale, undefined).tripwire, {});
+  assert.deepEqual(withServicesImage(stale, IMAGE).tripwire, { servicesImage: IMAGE });
 });
 
 test("withServicesImage works when the config has no Tripwire settings yet", () => {

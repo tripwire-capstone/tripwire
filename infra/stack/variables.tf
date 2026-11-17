@@ -180,17 +180,6 @@ variable "tripwire_services_image" {
   }
 }
 
-variable "laminar_project_id" {
-  description = "ID of the Laminar project Tripwire watches (the UUID in its Laminar URL). Used for \"Open in Laminar\" links. Empty until the user creates the project."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = var.laminar_project_id == "" || can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.laminar_project_id))
-    error_message = "laminar_project_id must be empty or a UUID like 42fc1e36-6c0e-4a69-9850-b0e849bb4656."
-  }
-}
-
 variable "judge_default_model" {
   description = "OpenAI model new Signals use by default (JUDGE_DEFAULT_MODEL)."
   type        = string

@@ -83,8 +83,9 @@ check.sql       "is data flowing?" report
 - **Real judge (runner):** fetch a trace's spans, render them as text, call the LLM with
   structured output, store the event and tokens/cost. Replaces the placeholder in `runner/run.py`.
 - **Real clustering:** embeddings, assign/discover, naming. Replaces `clusterer/cluster.py`.
-- **Encrypted Laminar keys:** `encrypt()`/`decrypt()` with `TRIPWIRE_SECRET_KEY`; the seed stores
-  the encrypted key, the poller decrypts per project instead of reading `.env`.
+- **Encrypted keys (done, SIG-103):** keys saved on the Settings page are encrypted with
+  `TRIPWIRE_SECRET_KEY` (`tripwire/crypto.py`); the workers look them up every loop
+  (`tripwire/project_keys.py`), falling back to `.env`.
 - **API + mock UI:** endpoints shaped like the mock's data helpers, then wire `signals/mock-ui`
   page by page (Events tab first).
 - **Migration runner:** apply new migrations without wiping the database.
