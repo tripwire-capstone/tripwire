@@ -1,7 +1,7 @@
 import { UserError } from "../core/errors.js";
 import { DEPLOYMENT_NAME } from "../core/paths.js";
 import { run, type Log } from "../core/run.js";
-import type { MigrationOutcome, MigrationTarget } from "../types/tripwire.js";
+import type { MigrationOutcome, MigrationTarget, MigrationWait } from "../types/tripwire.js";
 
 export const MIGRATION_LOG_GROUP = `/ecs/${DEPLOYMENT_NAME}/tripwire`;
 
@@ -40,14 +40,66 @@ export const runTaskArgs = (target: MigrationTarget, region: string, environment
   "--query", "tasks[0].taskArn", "--output", "text",
 ];
 
+// One task as describeArgs asks for it
+interface DescribedTask {
+  lastStatus?: string;
+  containers?: { exitCode?: number | null }[];
+  stoppedReason?: string;
+}
+
+const firstTask = (described: string): DescribedTask => (JSON.parse(described) as DescribedTask[])[0] ?? {};
+
 // The outcome from describe-tasks' JSON for one stopped task
 export const outcomeFrom = (described: string, taskArn: string): MigrationOutcome => {
-  const task = (JSON.parse(described) as { containers?: { exitCode?: number }[]; stoppedReason?: string }[])[0] ?? {};
+  const task = firstTask(described);
   return {
     exitCode: task.containers?.[0]?.exitCode ?? null,
     stoppedReason: task.stoppedReason,
     taskId: taskArn.split("/").pop() ?? taskArn,
   };
+};
+
+// Finished = the migration's container has an exit code (the program ended), or the task stopped
+// without one (it never ran). Doesn't wait for AWS to finish tearing the task down afterwards.
+export const migrationFinished = (described: string): boolean => {
+  const task = firstTask(described);
+  return typeof task.containers?.[0]?.exitCode === "number" || task.lastStatus === "STOPPED";
+};
+
+const describeArgs = (region: string, cluster: string, taskArn: string): string[] => [
+  "ecs", "describe-tasks", "--region", region, "--cluster", cluster, "--tasks", taskArn,
+  "--query", "tasks[].{lastStatus: lastStatus, containers: containers[].{exitCode: exitCode}, stoppedReason: stoppedReason}",
+  "--output", "json",
+];
+
+const MIGRATION_CHECK_MS = 5_000;
+const MIGRATION_LIMIT_MS = 10 * 60_000;
+const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Asks ECS every 5 s whether the migration has finished; returns the last answer. Replaces
+// `aws ecs wait tasks-stopped`, which waits for the whole task to be torn down and returned about
+// 6 minutes after the migration ended on the Nov 17 deploy.
+const waitForMigration = async (
+  log: Log,
+  region: string,
+  cluster: string,
+  taskArn: string,
+  wait: MigrationWait,
+): Promise<string> => {
+  const { intervalMs = MIGRATION_CHECK_MS, limitMs = MIGRATION_LIMIT_MS, sleep = defaultSleep, now = Date.now } = wait;
+  const startedAt = now();
+  for (;;) {
+    const described = await run(log, "aws", describeArgs(region, cluster, taskArn));
+    if (migrationFinished(described)) return described;
+    if (now() - startedAt >= limitMs) {
+      throw new UserError(
+        `Tripwire's database migration didn't finish within ${Math.round(limitMs / 60_000)} minutes.` +
+          `\n\nCheck its logs: aws logs tail ${MIGRATION_LOG_GROUP} --region ${region} --since 1h` +
+          "\nTripwire's services weren't changed. Run `tripwire deploy --lite` again once it's sorted.",
+      );
+    }
+    await sleep(intervalMs);
+  }
 };
 
 // The migration's last log lines, to show why it failed
@@ -65,24 +117,18 @@ const migrationLogTail = async (log: Log, region: string, taskId: string): Promi
   }
 };
 
-// Runs the one-off migration task (tripwire/migrate.py) and waits for it to stop; throws if it failed
+// Runs the one-off migration task (tripwire/migrate.py) and waits for it to finish; throws if it failed
 export const runMigration = async (
   log: Log,
   region: string,
   target: MigrationTarget,
   environment: Record<string, string> = {},
+  wait: MigrationWait = {},
 ): Promise<void> => {
   const taskArn = (await run(log, "aws", runTaskArgs(target, region, environment))).trim();
   if (!taskArn || taskArn === "None") throw new Error("ECS didn't start the migration task.");
 
-  // Polls every 6 s for up to 10 minutes; exits as soon as the task stops
-  await run(log, "aws", ["ecs", "wait", "tasks-stopped", "--region", region, "--cluster", target.cluster, "--tasks", taskArn]);
-
-  const described = await run(log, "aws", [
-    "ecs", "describe-tasks", "--region", region, "--cluster", target.cluster, "--tasks", taskArn,
-    "--query", "tasks[].{containers: containers[].{exitCode: exitCode}, stoppedReason: stoppedReason}",
-    "--output", "json",
-  ]);
+  const described = await waitForMigration(log, region, target.cluster, taskArn, wait);
   const outcome = outcomeFrom(described, taskArn);
   if (outcome.exitCode === 0) return;
 

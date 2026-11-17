@@ -21,3 +21,11 @@ export interface TripwireStart {
   databaseDoneAt?: number;
   databaseFailed?: boolean;
 }
+
+// How runMigration checks on the migration task; tests pass a fake clock and sleep
+export interface MigrationWait {
+  intervalMs?: number;
+  limitMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+}

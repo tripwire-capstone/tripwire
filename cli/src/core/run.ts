@@ -25,6 +25,9 @@ export class Log {
   }
 }
 
+// "21:39:12Z": UTC, like AWS's own timestamps, so log lines line up with the console and CloudWatch
+export const logClock = (ms: number): string => `${new Date(ms).toISOString().slice(11, 19)}Z`;
+
 // A program that failed: it ran and exited with an error, or couldn't start
 export class CommandError extends Error {
   // What the program printed on stderr, trimmed; empty if it never started
@@ -47,7 +50,10 @@ export async function runWithExitCode(
   options: RunOptions = {},
 ): Promise<{ stdout: string; exitCode: number }> {
   const { cwd, logStdout = true, okExitCodes = [], onLine } = options;
-  log.write(`\n$ ${file} ${args.join(" ")}\n${cwd ? `  (in ${cwd})\n` : ""}`);
+  // Each command is stamped with when it started and how long it took, so a slow step is visible
+  // in the log itself (the Nov 17 deploy's 6-minute wait had to be pieced together from AWS)
+  const startedAt = Date.now();
+  log.write(`\n$ [${logClock(startedAt)}] ${file} ${args.join(" ")}\n${cwd ? `  (in ${cwd})\n` : ""}`);
 
   const toLog = { file: log.path, append: true };
   // execa's file target gets the raw line even after a transform, so with onLine we log ourselves
@@ -78,6 +84,8 @@ export async function runWithExitCode(
   }
 
   const exitCode = result.exitCode ?? -1;
+  const finishedAt = Date.now();
+  log.write(`  [${logClock(finishedAt)}] took ${((finishedAt - startedAt) / 1000).toFixed(1)}s, exit ${exitCode}\n`);
   if (result.failed && !okExitCodes.includes(exitCode)) {
     throw new CommandError(
       `${result.shortMessage ?? `${file} failed`}\n\n${log.tail(20)}\n\nFull log: ${log.path}`,
