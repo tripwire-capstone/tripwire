@@ -83,10 +83,10 @@ then run `/mcp` in Claude Code, pick `tripwire` and choose Authenticate:
 Cognito access tokens have no audience claim, so the app client ID and the scope tie a token to this
 server: a token from the browser login has neither and is refused.
 
-**Not yet tried against a real pool.** The checks are unit tested with our own signing keys, and the
-routing under `/tripwire` is tested. On the first deploy, try the whole login once, in particular
-that Claude Code accepts Cognito's discovery document (`<issuer>/.well-known/openid-configuration`)
-and the callback path.
+**Tried on a real deployment** (Nov 17, 2026): Claude Code logged in through Cognito and called both
+tools on AWS. Cognito's discovery document doesn't list PKCE support (`code_challenge_methods_supported`),
+but Claude Code accepted it anyway. If another MCP client refuses it, the fix is for the MCP server to
+serve its own copy of that document with `"code_challenge_methods_supported": ["S256"]`.
 
 Terraform: `cognito.tf` (the `tripwire-mcp` resource server with its `read` scope, the public `-mcp`
 app client), `tripwire.tf` (the API's MCP settings, the `tripwire_mcp` rule), `outputs.tf`
