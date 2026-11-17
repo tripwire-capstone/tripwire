@@ -27,8 +27,9 @@ def slack_out(monkeypatch):
     return sent, results
 
 
-def poll(conn, environ=ENV):
-    notifier.poll_once(conn, Event(), UI, environ)
+def poll(conn, environ=ENV, cluster_wait=None):
+    """One notifier pass. By default critical alerts don't wait for the clusterer."""
+    notifier.poll_once(conn, Event(), UI, environ, cluster_wait=cluster_wait)
 
 
 def attempt(conn, kind="critical_run"):

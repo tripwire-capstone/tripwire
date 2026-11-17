@@ -3,6 +3,14 @@
 Alerts:
   * critical_run: a finished run with at least one critical finding. Shows the finding, with links
     to it in Tripwire and to the trace in Laminar (when the project's Laminar ID is set).
+    "Skip similar events" (mock-ui/SPEC.md): only the first critical event in a cluster alerts. The
+    notifier waits up to CLUSTER_WAIT_SECONDS after the run finishes for the clusterer to place the
+    event, then decides:
+      - in a cluster that already had a critical alert since Slack was connected: skipped (logged
+        with that cluster, never sent)
+      - in another cluster, or its summary failed, or the wait is over: sent
+      - not placed yet: looked at again on the next poll
+    A stuck clusterer (or no OpenAI key) only delays an alert by the wait; it never hides one.
   * new_cluster: a new cluster, once it has a name (or after 30 s). Shows its name, which is the
     summary of a typical finding, how many findings and conversations it has, and a link.
 
@@ -37,6 +45,7 @@ RETRY_DELAYS = (30, 120, 600, 1800)   # seconds to wait before tries 2, 3, 4 and
 MAX_TRIES = len(RETRY_DELAYS) + 1
 CLAIM_SECONDS = 60                    # a claimed alert is tried again after this if never resolved
 MAX_FINDING_CHARS = 300
+CLUSTER_WAIT_SECONDS = 60             # longest a critical alert waits for its event to be clustered
 
 
 def _not_handled(kind: str, record: str) -> str:
@@ -55,7 +64,13 @@ SELECT r.id AS run_id, s.id AS signal_id, s.name AS signal_name,
        (SELECT count(*) FROM signal_events AS c
         WHERE c.run_id = r.id AND c.severity = 'critical') AS critical_count,
        t.laminar_trace_id, p.laminar_ui_url, p.laminar_project_id,
-       p.id AS project_id, p.slack_webhook_url_encrypted
+       p.id AS project_id, p.slack_webhook_url_encrypted,
+       (SELECT m.cluster_id FROM cluster_members AS m WHERE m.event_id = first.id LIMIT 1) AS cluster_id,
+       (SELECT es.status FROM event_summaries AS es WHERE es.event_id = first.id) AS summary_status,
+       (%(cluster_wait)s::float8 IS NULL
+        OR r.finished_at <= now() - make_interval(secs => %(cluster_wait)s::float8)) AS waited_enough,
+       EXISTS (SELECT 1 FROM slack_notification_attempts AS a
+               WHERE a.notification_type = 'critical_run' AND a.record_id = r.id) AS decided
 FROM signal_runs AS r
 JOIN traces AS t ON t.id = r.trace_id
 JOIN signal_versions AS v ON v.id = r.signal_version_id
@@ -115,9 +130,48 @@ RETURNING a.tries
 """
 
 
-def find_critical_runs(conn, batch_size=50):
+# Another critical run in this cluster already alerted (or is being sent) since Slack was connected.
+# A failed alert doesn't count: the team never saw it.
+ALREADY_ALERTED_SQL = """
+SELECT EXISTS (
+    SELECT 1
+    FROM cluster_members AS m
+    JOIN signal_events AS e ON e.id = m.event_id AND e.severity = 'critical'
+    JOIN slack_notification_attempts AS a
+      ON a.notification_type = 'critical_run' AND a.record_id = e.run_id
+    JOIN projects AS p ON p.id = %(project_id)s
+    WHERE m.cluster_id = %(cluster_id)s
+      AND e.run_id <> %(run_id)s
+      AND a.status IN ('sent', 'pending')
+      AND a.attempted_at >= p.slack_enabled_at
+)
+"""
+
+SKIP_SQL = """
+INSERT INTO slack_notification_attempts
+    (notification_type, record_id, project_id, status, cluster_id)
+VALUES ('critical_run', %(run_id)s, %(project_id)s, 'skipped', %(cluster_id)s)
+ON CONFLICT (notification_type, record_id) DO NOTHING
+"""
+
+
+def find_critical_runs(conn, batch_size=50, cluster_wait=CLUSTER_WAIT_SECONDS):
     return conn.cursor(row_factory=dict_row).execute(
-        CRITICAL_RUNS_SQL, {"batch_size": batch_size}).fetchall()
+        CRITICAL_RUNS_SQL, {"batch_size": batch_size, "cluster_wait": cluster_wait}).fetchall()
+
+
+def critical_decision(conn, row) -> str:
+    """'send', 'skip' (a repeat in a cluster that already alerted) or 'wait' (not clustered yet)."""
+    if row["decided"]:  # a retry: it was already decided to send
+        return "send"
+    if row["cluster_id"] is not None:
+        (repeat,) = conn.execute(ALREADY_ALERTED_SQL, {
+            "cluster_id": row["cluster_id"], "run_id": row["run_id"],
+            "project_id": row["project_id"]}).fetchone()
+        return "skip" if repeat else "send"
+    if row["summary_status"] == "failed" or row["waited_enough"]:
+        return "send"
+    return "wait"
 
 
 def find_new_clusters(conn, batch_size=50):
@@ -256,10 +310,23 @@ def deliver(conn, kind, record_id, text, *, project_id, encrypted_webhook, envir
         mark_slack_verified(conn, project_id, encrypted_webhook)
 
 
-def poll_once(conn, stop, ui_url: str = DEFAULT_UI_URL, environ=os.environ):
-    for row in find_critical_runs(conn):
+def poll_once(conn, stop, ui_url: str = DEFAULT_UI_URL, environ=os.environ,
+              cluster_wait: float | None = CLUSTER_WAIT_SECONDS):
+    """One pass over due alerts. cluster_wait=None sends critical alerts without waiting for the
+    clusterer (a repeat that is already clustered is still skipped)."""
+    for row in find_critical_runs(conn, cluster_wait=cluster_wait):
         if stop.is_set():
             return
+        # Decided one run at a time, so a run sent earlier in this poll counts for the next one.
+        decision = critical_decision(conn, row)
+        if decision == "wait":
+            continue
+        if decision == "skip":
+            conn.execute(SKIP_SQL, {"run_id": row["run_id"], "project_id": row["project_id"],
+                                    "cluster_id": row["cluster_id"]})
+            log.info("Skipped Slack alert for critical_run %s: cluster %s already alerted",
+                     row["run_id"], row["cluster_id"])
+            continue
         deliver(conn, "critical_run", row["run_id"], critical_message(row, ui_url),
                 project_id=row["project_id"], encrypted_webhook=row["slack_webhook_url_encrypted"],
                 environ=environ)

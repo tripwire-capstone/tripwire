@@ -39,7 +39,7 @@ def describe(status: dict) -> str:
     lines = [f"Slack: connected since {status['enabled_at']}", f"First delivery: {verified}"]
     if "sent" in status:  # alerts since connecting (only status reads these)
         lines.append(f"Alerts: {status['sent']} sent, {status['retrying']} waiting to retry, "
-                     f"{status['failed']} failed")
+                     f"{status['failed']} failed, {status['skipped']} skipped as repeats")
         if status["failed"]:
             lines.append(f"Last failure: {status['last_failed_at']}: {status['last_error']}")
     return "\n".join(lines)

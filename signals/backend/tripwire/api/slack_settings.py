@@ -8,12 +8,13 @@ from ..slack import parse_slack_webhook_url
 
 def get_slack_status(conn, project_id: int) -> dict:
     """Whether Slack is connected, and how alerts since connecting have gone."""
-    enabled_at, verified_at, sent, retrying, failed, last_error, last_failed_at = conn.execute(
+    enabled_at, verified_at, sent, retrying, failed, skipped, last_error, last_failed_at = conn.execute(
         """
         SELECT p.slack_enabled_at, p.slack_verified_at,
                count(*) FILTER (WHERE a.status = 'sent'),
                count(*) FILTER (WHERE a.status = 'pending'),
                count(*) FILTER (WHERE a.status = 'failed'),
+               count(*) FILTER (WHERE a.status = 'skipped'),
                (array_agg(a.last_error ORDER BY a.attempted_at DESC)
                     FILTER (WHERE a.status = 'failed'))[1],
                max(a.attempted_at) FILTER (WHERE a.status = 'failed')
@@ -33,6 +34,7 @@ def get_slack_status(conn, project_id: int) -> dict:
         "sent": sent,
         "retrying": retrying,
         "failed": failed,
+        "skipped": skipped,  # repeats in a cluster that already alerted ("skip similar events")
         "last_error": last_error,
         "last_failed_at": last_failed_at,
     }

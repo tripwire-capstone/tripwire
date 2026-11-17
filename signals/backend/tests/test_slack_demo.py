@@ -53,8 +53,8 @@ def test_demo_rows_are_sent_once_after_connecting(conn, project, sent):
     add_critical_run(conn, project)
     add_cluster(conn, project)
 
-    notifier.poll_once(conn, Event(), environ=ENV)
-    notifier.poll_once(conn, Event(), environ=ENV)
+    notifier.poll_once(conn, Event(), environ=ENV, cluster_wait=None)
+    notifier.poll_once(conn, Event(), environ=ENV, cluster_wait=None)
 
     assert [url for _, url in sent] == [WEBHOOK, WEBHOOK]
     assert "*Critical*" in sent[0][0] and "credit card" in sent[0][0]
@@ -102,7 +102,7 @@ def test_nothing_is_sent_after_disconnecting(conn, project, sent):
     add_critical_run(conn, project)
     add_cluster(conn, project)
 
-    notifier.poll_once(conn, Event(), environ=ENV)
+    notifier.poll_once(conn, Event(), environ=ENV, cluster_wait=None)
 
     assert sent == []
 
