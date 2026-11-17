@@ -50,7 +50,7 @@ def test_ask_records_each_versions_answer_and_an_error_without_stopping(conn, mo
 
     assert event.answers[1]["summary"] == GOOD["summary"] and event.answers[1]["details"] is None
     assert "LLMRefused" in event.answers[2]["error"]
-    assert event.answers[3]["details"] == ["park: Glacier Bay"]          # cleaned like the real path
+    assert event.answers[3]["details"] == ["park: glacier bay"]          # cleaned like the real path
     assert [r["json_schema"] for r in llm.requests] == [p.schema for p in prompts.values()]
 
 

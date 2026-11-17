@@ -138,9 +138,25 @@ def test_v1_answer_has_no_details_key_so_details_stay_none():
     assert decide(ok(), None, NOW).details is None
 
 
-def test_details_are_trimmed_and_blanks_and_case_duplicates_dropped_first_spelling_kept():
-    raw = {"details": ["  park: Glacier Bay ", "", "   ", "PARK: glacier bay", "tool: book_campsite"]}
-    assert clean_details(raw) == (["park: Glacier Bay", "tool: book_campsite"], None)
+def test_details_are_trimmed_lowercased_and_blanks_and_duplicates_dropped():
+    raw = {"details": ["  park: Glacier Bay ", "", "   ", "PARK: glacier bay", "Tool: Book_Campsite"]}
+    assert clean_details(raw) == (["park: glacier bay", "tool: book_campsite"], None)
+
+
+def test_a_detail_holding_an_email_is_dropped_with_a_warning():
+    raw = {"details": ["email: casey.morgan@example.com", "tool: find_user_id_by_email",
+                       "contact: Reach me at a.b@shop.co.uk"]}
+    details, warning = clean_details(raw)
+    assert details == ["tool: find_user_id_by_email"]       # a tool name with "email" in it stays
+    assert warning == "dropped 2 detail(s) holding an email address"
+
+
+def test_prompt_v4_keeps_v1s_summary_rules_word_for_word():
+    v1, v4 = load_prompt(1).system, load_prompt(4).system
+    for line in v1.splitlines():
+        assert line in v4                                     # every v1 line is still there
+    assert "Leave out anything that identifies a person or account" in v4
+    assert load_prompt(4).schema["required"] == ["cause", "summary", "details"]
 
 
 def test_an_empty_details_list_is_kept_as_empty_not_none():
@@ -356,7 +372,7 @@ def test_details_are_saved_as_a_json_list(conn):
     _, _, event_id = make_event(conn)
     save(conn, event_id, decide(ok(GOOD | {"details": ["park: Glacier Bay"]}), None, NOW),
          "gpt-6-luna", 2, NOW)
-    assert conn.execute("SELECT details FROM event_summaries").fetchone()[0] == ["park: Glacier Bay"]
+    assert conn.execute("SELECT details FROM event_summaries").fetchone()[0] == ["park: glacier bay"]
 
 
 def test_a_v1_answer_saves_null_details(conn):
@@ -379,5 +395,5 @@ def test_summarize_event_with_prompt_v2_saves_details_end_to_end(conn):
     update = summarize_event(conn, llm, event_id, "gpt-6-luna", load_prompt(2), NOW)
     assert update.status == "done"
     assert conn.execute("SELECT prompt_version, details FROM event_summaries").fetchone() == (
-        2, ["park: Glacier Bay", "tool: book_campsite"])
+        2, ["park: glacier bay", "tool: book_campsite"])
     assert llm.requests[0]["json_schema"]["required"] == ["cause", "summary", "details"]

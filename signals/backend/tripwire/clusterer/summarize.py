@@ -14,6 +14,7 @@ summarize_event() runs them for one event. Bugs in our own code are deliberately
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -33,6 +34,7 @@ BAD_OUTPUT_WAIT = timedelta(minutes=1)
 SERVICE_WAIT = timedelta(seconds=30)
 LONG_SUMMARY_CHARS = 300      # longer is logged as a warning, not rejected (Q19)
 MAX_DETAILS = 8               # prompt v2+ asks for up to 6; anything past 8 is dropped (SIG-64)
+EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")   # a detail holding an email is dropped (prompt v4)
 
 
 # ------------------------------------------------------------------ prompt files
@@ -199,26 +201,31 @@ def clean_details(output):
     """(details, warning) from a model answer. Details are extra: they never fail an event (SIG-64).
 
     No "details" key (prompt v1) -> None, so v1 rows stay NULL. Otherwise a list of trimmed,
-    non-blank strings, duplicates dropped (ignoring case, first spelling kept), at most MAX_DETAILS.
-    Anything that isn't a string is dropped; a non-list becomes [] with a warning.
+    lowercased, non-blank strings, duplicates dropped, at most MAX_DETAILS. Lowercasing here means
+    the same thing matches however the model capitalized it (counting and naming rely on that).
+    Anything that isn't a string is dropped; a detail holding an email address is dropped with a
+    warning (personal data; the prompt asks for none, this is the safety net); a non-list
+    becomes [] with a warning.
     """
     if "details" not in output:
         return None, None
     raw = output["details"]
     if not isinstance(raw, list):
         return [], f"details was {type(raw).__name__}, not a list; saved as empty"
-    cleaned, seen = [], set()
+    cleaned, warnings, emails = [], [], 0
     for item in raw:
-        text = item.strip() if isinstance(item, str) else ""
-        if not text or text.casefold() in seen:
+        text = item.strip().lower() if isinstance(item, str) else ""
+        if EMAIL.search(text):
+            emails += 1
             continue
-        seen.add(text.casefold())
-        cleaned.append(text)
-    warning = None
+        if text and text not in cleaned:
+            cleaned.append(text)
+    if emails:
+        warnings.append(f"dropped {emails} detail(s) holding an email address")
     if len(cleaned) > MAX_DETAILS:
-        warning = f"{len(cleaned)} details, kept the first {MAX_DETAILS}"
+        warnings.append(f"{len(cleaned)} details, kept the first {MAX_DETAILS}")
         cleaned = cleaned[:MAX_DETAILS]
-    return cleaned, warning
+    return cleaned, "; ".join(warnings) or None
 
 
 def _after_error(error, row, now):

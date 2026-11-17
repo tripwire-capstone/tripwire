@@ -172,6 +172,17 @@ Code: `tripwire/clusterer/summarize.py`, `llm_client.py`, `prompts/`. Full reaso
   clusterer on a copy of the database.
 - **Decision rule (agreed before looking):** v2 by default if close; v3 only if it keeps names
   consistently and that separates causes v2 merges; if both disappoint, detail counting (backlog) comes back.
+- **Result (Nov 16, tau sample of 69 events, gpt-6-luna):** neither won. v2 still named the item in 10
+  of 26 Intent events (its own rule, applied inconsistently, which would split clusters by wording) and
+  sometimes went vague; v3 behaved like v1. Issues summaries were near-identical in all versions. The
+  visible problems were elsewhere: names taken from one member, loosely formed clusters, and a noisy
+  product-area ending (it changed between versions in 35 of 69 events). Details were useful but messy:
+  29-39 different kinds, personal data in 7 events, copied finding fields.
+- **Prompt v4 (chosen):** v1's summary rules word for word (grouping unchanged) plus `details` with
+  tighter rules: kinds from item / place / tool / error / payment method (or another general word),
+  lowercase singular values, no personal or account data, numbers only when they're the point, no
+  copied finding fields. `clean_details()` also lowercases every detail and drops any holding an email
+  address, as a safety net. Summarizer model stays gpt-6-luna; a stronger model is planned for naming.
 
 ## Prepare step (PR 3 + 4, decided Nov 11)
 
