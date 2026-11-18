@@ -33,6 +33,7 @@ Compose starts, in order:
 | `poller` | Every 10 s: new finished traces from Laminar → `traces`. Looks back 24 h on its first poll. |
 | `runner` | **Placeholder.** Every 5 s: a `done` run per new trace; an event for about half of them. |
 | `clusterer` | Every 10 s: summarizes and embeds new events (OpenAI: the key saved on the Settings page, else `OPENAI_API_KEY` in `.env`; with neither it waits), then groups them into clusters. `CLUSTERER_MODE=placeholder` runs a no-OpenAI stand-in. |
+| `api` | The HTTP API the UI reads, on `localhost:8080`, with the MCP server for coding agents inside it at `/api/mcp` ([MCP.md](MCP.md)). |
 
 Send some traffic (park-traffic or tau-traffic) to the same Laminar project, then:
 
@@ -69,6 +70,7 @@ tripwire/
   poller/       laminar.py (SQL API client), poll.py (one poll of one project), __main__.py (the loop)
   runner/       run.py: PLACEHOLDER judge step
   clusterer/    cluster.py: PLACEHOLDER clustering step
+  mcp_server/   the MCP server (MCP.md)
   placeholder.py  hash rule + worker loop shared by the placeholders
   seed.py
 tests/          poller (fake Laminar + real Postgres), seed and placeholders

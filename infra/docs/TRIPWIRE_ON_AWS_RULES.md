@@ -91,6 +91,7 @@ On AWS the database keeps its data across deploys. So the migration task records
 
 - **New API routes go under `/api/...`.** `serve.py` only sends paths starting with `/api` to the API; anything else under `/tripwire/` gets the UI page. An MCP endpoint, for example, belongs at `/api/mcp`: `localhost:8080/api/mcp` locally and `/tripwire/api/mcp` on AWS.
 - **Endpoints that programs call** (MCP clients, webhooks) can't get past the Cognito login page. They need their own load balancer rule that skips Cognito, at a priority before Tripwire's rule (25), for example 23. The endpoint then checks a token itself. Ask whoever owns the infra; it's a few lines in `tripwire.tf`. Laminar's `/v1/*` works the same way today.
+  Tripwire's MCP server works this way: it's inside the API at `/tripwire/api/mcp`, the `tripwire_mcp` rule (23) skips Cognito for it and for its login document (`/.well-known/oauth-protected-resource/tripwire/api/mcp`, at the host's root), and it checks Cognito access tokens itself. See `signals/backend/MCP.md`.
 - **A new worker** runs from the same image with a different start command. Add it to `local.tripwire_services` in `tripwire.tf`, to `TRIPWIRE` in `cli/src/aws/ecs.ts` (so `tripwire deploy` waits for it), and to the Backend row in `cli/src/ui/tripwireRows.ts`. A worker that must never run twice (like the poller) needs `maximum_percent = 100` and `minimum_healthy_percent = 0`.
 - **Laminar already has its own MCP** at `/v1/mcp` (tools `query_laminar_sql`, `get_trace_context`, `ask_agent`), using a project API key. Avoid duplicating it.
 

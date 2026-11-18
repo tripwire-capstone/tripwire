@@ -83,3 +83,12 @@ output "tripwire_logs_command" {
   description = "Follow all Tripwire containers' logs (migrate, poller, runner, clusterer, api)."
   value       = "aws logs tail ${aws_cloudwatch_log_group.tripwire.name} --follow"
 }
+
+output "mcp_cognito_settings" {
+  description = "Settings that turn on the MCP server's Cognito login (MCP_COGNITO_* in the backend's .env)."
+  value = {
+    MCP_COGNITO_REGION       = var.region
+    MCP_COGNITO_USER_POOL_ID = aws_cognito_user_pool.main.id
+    MCP_COGNITO_CLIENT_ID    = aws_cognito_user_pool_client.mcp.id
+  }
+}
