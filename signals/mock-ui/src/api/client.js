@@ -57,6 +57,8 @@ export const countRuns = (id, range, bucketMinutes, filters) =>
 export const listClusters = (id, range) => request("GET", `/signals/${id}/clusters?${query(range)}`);
 export const getOverview = (range, bucketMinutes) =>
   request("GET", `/overview?${query(range, { bucket_minutes: bucketMinutes, tz: browserZone() })}`);
+// The built-in signal templates (signals/backend/tripwire/signal_templates/), in display order.
+export const listTemplates = () => request("GET", "/templates");
 export const createSignal = (body) => request("POST", "/signals", body);
 export const editSignal = (id, body) => request("PUT", `/signals/${id}`, body);
 export const setActive = (id, active) =>

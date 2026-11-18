@@ -61,7 +61,7 @@ Every screen reads one file, `mock-ui/src/mock/data.js`. Proposed story: the Oly
 | tripwireEvent | id, tripwireId, traceId, conversationId, time, appVersion, severity (critical / warning / info), payload {…}, excerpt (visitor message + reply), clusterId |
 | cluster | id, tripwireId, parentId (null for top level), name, summary |
 | run | id, tripwireId, traceId, time, source (trigger / backfill), status (completed / failed), eventId (null = no event), clusterId, cost |
-| tripwireTemplate | the 6 Laminar templates (Failure, Logic, Task, Friction, Hallucination, Intent): instruction + payloadFields; preset tripwires use them |
+| tripwireTemplate | the built-in templates from `GET /api/templates` (Issues, Friction, Intent, with Laminar's wording): instruction + payloadFields; preset tripwires use them |
 | sampleTrace | scripted traces for "Test on a sample trace", with each template's result |
 | version | app version + when it was first seen (version markers on charts) |
 | notification | id, time, type (new cluster / new critical event), tripwireId, clusterId, text, read |

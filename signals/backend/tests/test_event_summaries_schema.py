@@ -11,9 +11,13 @@ from tripwire.seed import seed
 
 @pytest.fixture
 def event_id(conn):
-    """One real signal_events row, made by the seed and the placeholder runner."""
+    """One real signal_events row, made by the seed, a signal and the placeholder runner."""
     seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh")
     project = conn.execute("SELECT id FROM projects WHERE name = 'default'").fetchone()[0]
+    signal = conn.execute("INSERT INTO signals (project_id, name) VALUES (%s, 'Test signal') RETURNING id",
+                          (project,)).fetchone()[0]
+    conn.execute("""INSERT INTO signal_versions (signal_id, version_number, instruction, output_schema, model)
+                    VALUES (%s, 1, 'Flag frustrated users.', '[]', 'gpt-6-luna')""", (signal,))
     trace_id = conn.execute(
         """INSERT INTO traces (project_id, laminar_trace_id, started_at, ended_at, status)
            VALUES (%s, %s, now() - interval '1 minute', now(), 'success') RETURNING id""",

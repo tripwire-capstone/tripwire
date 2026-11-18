@@ -1,0 +1,25 @@
+{
+  "name": "Intent Classifier",
+  "short_name": "Intent",
+  "icon": "target",
+  "description": "Classify what the user was trying to accomplish",
+  "output_schema": [
+    {
+      "name": "intent",
+      "type": "string",
+      "description": "The user's primary intent",
+      "nullable": false
+    },
+    {
+      "name": "complexity",
+      "type": "enum",
+      "description": "Complexity of the user's request",
+      "nullable": false,
+      "choices": [
+        "simple",
+        "moderate",
+        "complex"
+      ]
+    }
+  ]
+}

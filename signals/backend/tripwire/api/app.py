@@ -22,6 +22,7 @@ from ..judge.judge import judge
 from ..judge.types import JudgeError, SignalVersion, TraceRow
 from ..judge.laminar import JudgeLaminarSQL
 from ..project_keys import LABELS, project_key
+from ..signal_templates import TEMPLATES
 from .db import get_conn
 from .validate import normalize_fields, problems
 
@@ -166,8 +167,26 @@ def health(conn=Depends(get_conn)):
     return {"ok": True}
 
 
+class TemplateOut(BaseModel):
+    id: str
+    name: str
+    short_name: str
+    icon: str
+    description: str
+    instruction: str
+    output_schema: list
+
+
+@app.get("/api/templates", response_model=list[TemplateOut])
+def list_templates():
+    """The built-in signal templates (tripwire/signal_templates/), in the order the form shows them."""
+    return [TemplateOut(**vars(t)) for t in TEMPLATES.values()]
+
+
 @app.post("/api/signals", status_code=201, response_model=SignalOut)
 def create_signal(body: SignalCreate, conn=Depends(get_conn)):
+    if body.template is not None and body.template not in TEMPLATES:
+        raise HTTPException(422, [f"unknown template: {body.template!r}"])
     check(body)
     project_id = the_project(conn)
     name = body.name.strip()

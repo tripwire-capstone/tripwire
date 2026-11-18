@@ -11,6 +11,7 @@ import {
   settingsFromApi,
   signalFromApi,
   summaryFromApi,
+  templateFromApi,
 } from "./adapt";
 
 // Loads data when the page opens or a dependency changes. Returns { data, error, loading, reload }.
@@ -89,6 +90,10 @@ export const useOverview = (range, bucketMinutes) =>
     () => client.getOverview(range, bucketMinutes).then(overviewFromApi),
     [range?.start, range?.end, bucketMinutes],
   );
+
+// The New signal form's template tiles.
+export const useTemplates = () =>
+  useApi(() => client.listTemplates().then((rows) => rows.map(templateFromApi)), []);
 
 // The Settings page and the "not connected yet" banner. The layout loads it once and shares it with
 // the Settings page (useOutletContext), so saving a key updates the banner too.
