@@ -26,7 +26,7 @@ def test_load_settings_uses_design_defaults_when_nothing_is_set():
     assert settings.mode == "real"
     assert settings.interval_seconds == 10
     assert settings.prepare_batch == 50
-    assert settings.assign_threshold == 0.30
+    assert settings.assign_threshold == 0.18
     assert settings.min_events == 3
     assert settings.min_conversations == 2
     assert settings.pool_window_days == 14
