@@ -160,9 +160,9 @@ variable "alert_email" {
 variable "tripwire_image" {
   description = "The published Tripwire image, pinned by digest (ghcr.io/<owner>/tripwire-backend@sha256:...). The migration task always uses it; the services get it through tripwire_services_image."
   type        = string
-  # Built from commit 6de7eb0 (tag :6de7eb0): the MCP server and the Settings page. When publishing
-  # a new image, replace the digest.
-  default = "ghcr.io/tripwire-capstone/tripwire-backend@sha256:3c40f1f7f39cd38b069e6121a91f4552585cfdc95382ea8e04e7e804493a947e"
+  # Built from commit 3ef3b78 (tag :3ef3b78): Settings, MCP, the Slack notifier, signal templates,
+  # summarizer v5 + threshold 0.24, summaries 4 at a time. When publishing a new image, replace the digest.
+  default = "ghcr.io/tripwire-capstone/tripwire-backend@sha256:3801d75c8641ad7da79c2739c622de331634b79953437e8f357467a9d028bb84"
 
   validation {
     condition     = var.tripwire_image != null && can(regex("^[a-z0-9.-]+(/[a-z0-9._-]+)+@sha256:[a-f0-9]{64}$", var.tripwire_image))
