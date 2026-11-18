@@ -54,17 +54,17 @@ def test_live_events_go_before_backfill_then_oldest_first(conn):
     live_old = unembedded_event(conn, version_id, created_minutes_ago=30)
 
     seen = []
-    original = prepare_module.summarize_event
+    original = prepare_module.start_summary
 
-    def recording(conn_, llm, event_id, *args):
+    def recording(conn_, event_id, *args):
         seen.append(event_id)
-        return original(conn_, llm, event_id, *args)
+        return original(conn_, event_id, *args)
 
-    prepare_module.summarize_event = recording
+    prepare_module.start_summary = recording
     try:
         preparer(FakeLLM([GOOD] * 3)).prepare_events(conn, 10)
     finally:
-        prepare_module.summarize_event = original
+        prepare_module.start_summary = original
     assert seen == [live_old, live_new, backfill_old]
 
 

@@ -77,6 +77,7 @@ in `settings.py` and `signals/backend/.env.example`; set only what differs.
 | `CLUSTER_ASSIGN_THRESHOLD` | 0.24 | calibrated Nov 17 with summarizer v5 (was 0.30); must be in (0, 1] |
 | `CLUSTER_MIN_EVENTS` / `CLUSTER_MIN_CONVERSATIONS` | 3 / 2 | conversations can't exceed events |
 | `CLUSTER_POOL_WINDOW_DAYS` | 14 | |
+| `CLUSTERER_SUMMARY_THREADS` | 4 | summaries requested at once; at least 1; shares the OpenAI key's rate limit with the judge (`RUNNER_THREADS`) |
 | `CLUSTER_HEALTH_STALL_MINUTES` / `CLUSTER_HEALTH_FAILURE_RUN` | 15 / 10 | Q12's two rules |
 | `CLUSTER_HEALTH_ALIVE_MINUTES` | 3 | `--alive` fails after this long without a pass; must exceed the interval |
 | `CLUSTERER_LAST_PASS_FILE` | `/tmp/clusterer-last-pass` | where each pass records its time; must be writable in the container |

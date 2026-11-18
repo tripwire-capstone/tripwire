@@ -8,8 +8,12 @@ Decisions: Design Notes Q17-Q20 and docs/clustering/DESIGN.md. The pieces, in ca
   decide          pure: every rule for what the row becomes after that call
   save            one upsert of what decide returned
 
-summarize_event() runs them for one event. Bugs in our own code are deliberately NOT caught here
-(fail loudly, Q20): the row stays as it was and the caller logs the traceback.
+Grouped into three steps so the slow call can run off the main thread (SIG-111):
+  start_summary    load_event + build_messages      (main thread: database)
+  call_summarizer  llm.complete                     (any thread: no database)
+  finish_summary   decide + save                    (main thread: database)
+summarize_event() runs the three for one event. Bugs in our own code are deliberately NOT caught
+here (fail loudly, Q20): the row stays as it was and the caller logs the traceback.
 """
 
 import json
@@ -320,20 +324,31 @@ def save(conn, event_id, update, model, prompt_version, now):
 
 # ------------------------------------------------------------------ one event, end to end
 
-def summarize_event(conn, llm, event_id, model, prompt, now):
-    """Summarize one event and save the outcome. Returns the RowUpdate that was saved.
-
-    The caller (prepare_events, PR 4) chooses which events to try and catches unexpected errors
-    per event, so one buggy event can't block the queue (Q20, decision C).
-    """
-    event = load_event(conn, event_id)
-    messages = build_messages(event, prompt.system)
+def start_summary(conn, event_id, prompt):
+    """The messages for one event's summarizer call (main thread: reads the database)."""
+    messages = build_messages(load_event(conn, event_id), prompt.system)
     log.info("summarizing event %s (%d characters of input)", event_id,
              sum(len(message["content"]) for message in messages))
+    return messages
+
+
+def call_summarizer(llm, model, messages, schema):
+    """One paid LLM call. Safe on any thread: it doesn't touch the database.
+
+    An LLMError (timeout, rate limit, bad output, refusal, too long) is the call's outcome, so it's
+    returned for decide() to judge. Anything else is a bug in our code and is raised (Q20).
+    """
     try:
-        outcome = llm.complete(model, messages, prompt.schema)
+        return llm.complete(model, messages, schema)
     except LLMError as error:
-        outcome = error
+        return error
+
+
+def finish_summary(conn, event_id, outcome, model, prompt, now):
+    """Decide what the call's outcome means for the row, save it, and log any warning.
+
+    Main thread: reads and writes the database. Returns the RowUpdate that was saved.
+    """
     update = decide(outcome, load_row(conn, event_id), now)
     save(conn, event_id, update, model, prompt.version, now)
     if update.warning:
@@ -342,3 +357,16 @@ def summarize_event(conn, llm, event_id, model, prompt, now):
         log.warning("event %s: %s (%s), status %s, attempts %d", event_id, update.error_kind,
                     update.last_error, update.status, update.attempts)
     return update
+
+
+def summarize_event(conn, llm, event_id, model, prompt, now):
+    """Summarize one event and save the outcome. Returns the RowUpdate that was saved.
+
+    The three steps one after another. prepare.py runs them separately instead, so several
+    events' calls can be in flight at once while the database stays on one thread (SIG-111).
+    The caller chooses which events to try and catches unexpected errors per event, so one buggy
+    event can't block the queue (Q20, decision C).
+    """
+    messages = start_summary(conn, event_id, prompt)
+    outcome = call_summarizer(llm, model, messages, prompt.schema)
+    return finish_summary(conn, event_id, outcome, model, prompt, now)
