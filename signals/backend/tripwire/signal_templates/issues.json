@@ -1,0 +1,14 @@
+{
+  "name": "Issues",
+  "short_name": "Issues",
+  "icon": "alert-circle",
+  "description": "Spot errors, loops and wrong tool usage",
+  "output_schema": [
+    {
+      "name": "description",
+      "type": "string",
+      "description": "What went wrong, the decisive evidence with span references, and the impact on the run's outcome",
+      "nullable": false
+    }
+  ]
+}

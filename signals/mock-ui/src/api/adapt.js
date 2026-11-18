@@ -127,6 +127,25 @@ export function definitionToApi(values) {
   };
 }
 
+// A built-in template -> the form's template shape (its fields in the same shape as a signal's).
+export function templateFromApi(t) {
+  return {
+    id: t.id,
+    name: t.name,
+    shortName: t.short_name,
+    icon: t.icon,
+    description: t.description,
+    instruction: t.instruction,
+    payloadFields: t.output_schema.map((f) => ({
+      name: f.name,
+      type: f.type,
+      description: f.description,
+      choices: f.choices ?? [],
+      nullable: f.nullable,
+    })),
+  };
+}
+
 export const templateToApi = (templateId) =>
   templateId && templateId !== "blank" ? templateId : null;
 

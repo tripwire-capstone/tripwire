@@ -4,7 +4,7 @@ Read this before changing anything in `mock-ui/`. What each screen shows is in `
 Before touching a signals page or `src/api/`, also read `SIGNALS_API.md` (how they're wired to the API).
 
 - **One data source: the real API.** Every page reads it through `src/api/` (hooks such as `useSignals`,
-  `useSignal`, `useEvents`, `useEventCounts`, `useRuns`, `useRunCounts`, `useClusters`, `useOverview`, `useSettings`, `useSlack`, and actions
+  `useSignal`, `useEvents`, `useEventCounts`, `useRuns`, `useRunCounts`, `useClusters`, `useOverview`, `useSettings`, `useSlack`, `useTemplates`, and actions
   `createSignal`, `editSignal`, `setActive`, `testRun`, `saveKey`, `clearKey`, `connectSlack`, `disconnectSlack`). Never call `fetch` in a page; add a function to
   `src/api/` instead. `src/api/adapt.js` turns API responses into the shapes the pages use. There is no fake data.
 - **Count in the database, never in the page.** Totals, charts, filters, search and paging come from the API

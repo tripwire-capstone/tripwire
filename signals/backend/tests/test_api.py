@@ -40,11 +40,11 @@ def versions(conn):
 
 
 def test_create_makes_a_signal_with_version_1(client):
-    r = create(client, template="failure")
+    r = create(client, template="issues")
     assert r.status_code == 201
     body = r.json()
     assert (body["name"], body["version_number"], body["active"], body["template"]) == \
-        ("Made-up facts", 1, True, "failure")
+        ("Made-up facts", 1, True, "issues")
     assert body["output_schema"][0] == {"name": "claim", "type": "string",
                                         "description": "The invented fact", "nullable": False}
 
@@ -180,6 +180,20 @@ def test_rename_to_a_taken_name_is_409(client):
     create(client)
     other = create(client, name="Other").json()["id"]
     assert client.put(f"/api/signals/{other}", json=VALID).status_code == 409
+
+
+def test_unknown_template_is_refused(client):
+    r = create(client, template="failure")
+    assert r.status_code == 422
+    assert r.json()["detail"] == ["unknown template: 'failure'"]
+
+
+def test_templates_list_the_three_in_order(client):
+    templates = client.get("/api/templates").json()
+    assert [t["id"] for t in templates] == ["issues", "friction", "intent"]
+    intent = templates[2]
+    assert (intent["name"], intent["short_name"]) == ("Intent Classifier", "Intent")
+    assert [f["name"] for f in intent["output_schema"]] == ["intent", "complexity"]
 
 
 def test_template_cannot_be_changed_by_an_edit(client):

@@ -11,7 +11,6 @@ row here, all in the same PR.
 |---|---|---|---|
 | `appVersions` | App version markers on charts; App version filter and column | Traces' app versions aren't stored | The poller stores app versions from trace metadata |
 | `deleteSignals` | Row checkboxes and Delete on the Signals list | No delete endpoint (a signal can be turned off instead) | A delete endpoint, and a decision about what happens to its runs, events and clusters |
-| `templates` | Template tiles on the New signal form (and Home's "What visitors asked for" card, which needs an Intent-template signal) | Templates live in the judge half, not built yet | `templates.py` and a templates endpoint |
 | `spanTrigger` | "When a specific span finishes" trigger | Runs are only created when a trace finishes | The poller supports span triggers |
 | `tokenFilter` | "Total tokens" filter | `matches()` supports only `status` | The poller stores token totals and `matches()` supports them |
 | `spanAndTagFilters` | "Span names" and "Tags" filters | Same | The poller stores span names and tags and `matches()` supports them |

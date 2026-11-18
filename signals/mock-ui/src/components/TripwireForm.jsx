@@ -4,9 +4,11 @@ import {
   ActionIcon,
   Alert,
   Box,
+  Center,
   Button,
   Divider,
   Group,
+  Loader,
   NumberInput,
   Radio,
   Select,
@@ -20,7 +22,7 @@ import {
   Tooltip,
   UnstyledButton,
 } from "@mantine/core";
-import { FEATURES, TEMPLATES } from "../api";
+import { FEATURES, useTemplates } from "../api";
 import { SeverityBadge } from "./Badges";
 import { formatCost } from "./format";
 import classes from "./TripwireForm.module.css";
@@ -229,9 +231,19 @@ export default function TripwireForm({
   onTest,
   onCancel,
 }) {
+  // The form starts from a template, so it waits for them. If they can't load, it works without.
+  const { data: templates, loading } = useTemplates();
+  if (loading) {
+    return (
+      <Center py="xl">
+        <Loader size="sm" />
+      </Center>
+    );
+  }
   return (
     <TripwireFormFields
       key={`${mode}:${JSON.stringify(initialValues ?? null)}`}
+      templates={templates ?? []}
       initialValues={initialValues}
       mode={mode}
       onSubmit={onSubmit}
@@ -245,13 +257,11 @@ export default function TripwireForm({
 const errorText = (error) =>
   Array.isArray(error?.detail) ? error.detail.join(" · ") : error?.message || "Unknown error";
 
-function TripwireFormFields({ initialValues, mode, onSubmit, onTest, onCancel }) {
-  const tripwireTemplates = TEMPLATES;
+function TripwireFormFields({ templates: tripwireTemplates, initialValues, mode, onSubmit, onTest, onCancel }) {
   const editing = mode === "edit";
-  // With templates hidden, a new signal starts blank instead of from the Friction template.
+  // A new signal starts from the Friction template (as in Laminar); editing keeps the signal's own.
   const initial = tripwireTemplates.find(
-    (template) =>
-      template.id === (editing ? initialValues?.templateId : FEATURES.templates ? "friction" : null),
+    (template) => template.id === (editing ? initialValues?.templateId : "friction"),
   );
   const ids = useId();
   const [templateId, setTemplateId] = useState(initial?.id || "blank");
@@ -492,7 +502,7 @@ function TripwireFormFields({ initialValues, mode, onSubmit, onTest, onCancel })
             error={errors.name}
             data-autofocus
           />
-          {!editing && FEATURES.templates && (
+          {!editing && tripwireTemplates.length > 0 && (
             <Stack gap="xs">
               <Label help="Prefill the form with a preset or start blank.">
                 Template
