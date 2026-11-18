@@ -127,6 +127,34 @@ def test_replay_drops_its_schema_and_raises_when_a_step_fails(conn, monkeypatch)
     assert sweep_schemas(conn) == []
 
 
+def test_replay_calls_before_drop_inside_the_copy_then_drops_it(conn):
+    _, version_id = add_signal(conn)
+    events_in_conversations(conn, version_id, vectors_all_apart(3, 0.10))
+    path_before = conn.execute("SHOW search_path").fetchone()[0]
+    seen = {}
+
+    def before_drop(copy_conn):
+        seen["schema"] = copy_conn.execute("SELECT current_schema()").fetchone()[0]
+        seen["clusters"] = copy_conn.execute("SELECT count(*) FROM clusters").fetchone()[0]
+
+    replay(conn, 0.30, environ={}, before_drop=before_drop)
+    assert seen["schema"].startswith("calib_") and seen["clusters"] == 1        # the replayed cluster
+    assert conn.execute("SHOW search_path").fetchone()[0] == path_before
+    assert sweep_schemas(conn) == []
+
+
+def test_replay_drops_its_schema_when_before_drop_raises(conn):
+    _, version_id = add_signal(conn)
+    events_in_conversations(conn, version_id, vectors_all_apart(3, 0.10))
+
+    def broken(copy_conn):
+        raise RuntimeError("caller failed")
+
+    with pytest.raises(RuntimeError, match="caller failed"):
+        replay(conn, 0.30, environ={}, before_drop=broken)
+    assert sweep_schemas(conn) == []
+
+
 def test_replay_refuses_to_copy_a_sweep_schema(conn):
     with pytest.raises(SweepError, match="sweep schema"):
         replay(conn, 0.30, source_schema="calib_12345678", environ={})

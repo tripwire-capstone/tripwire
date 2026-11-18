@@ -110,12 +110,15 @@ def _create_copy(conn, source_schema):
     return schema
 
 
-def replay(conn, threshold, source_schema=None, environ=None):
+def replay(conn, threshold, source_schema=None, environ=None, before_drop=None):
     """Replay the clusterer on a copy of `source_schema` (default: the connection's current schema)
     at `threshold`. Returns {event_id: cluster_id or None (pool)} for every embedded event.
 
     `conn` must be in autocommit mode (each step commits on its own, as in the live loop). Its
     search_path is put back afterwards, and the copy is always dropped.
+
+    `before_drop(conn)`, if given, runs once the replay has settled, while the copy is still the
+    search_path, so a caller can read or name the replayed clusters (eval/cluster-loop's scorer).
     """
     original_path = conn.execute("SHOW search_path").fetchone()[0]
     source_schema = source_schema or conn.execute("SELECT current_schema()").fetchone()[0]
@@ -157,6 +160,8 @@ def replay(conn, threshold, source_schema=None, environ=None):
         membership = dict(conn.execute(
             "SELECT embedded.event_id, member.cluster_id FROM event_embeddings embedded "
             "LEFT JOIN cluster_members member ON member.event_id = embedded.event_id"))
+        if before_drop is not None:
+            before_drop(conn)
     finally:
         conn.execute("SELECT set_config('search_path', %s, false)", (original_path,))
         if schema is not None:

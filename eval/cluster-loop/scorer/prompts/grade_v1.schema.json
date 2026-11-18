@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "cause": {"type": "integer", "enum": [0, 1, 2]},
+    "fit": {"type": "integer", "enum": [0, 1, 2]},
+    "distinct": {"type": "integer", "enum": [0, 1, 2]}
+  },
+  "required": ["cause", "fit", "distinct"],
+  "additionalProperties": false
+}

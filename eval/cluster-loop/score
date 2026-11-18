@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Launcher for the frozen cluster-quality scorer (scorer/), with the backend's venv
+# (signals/backend/.venv), since the scorer imports the backend package.
+#
+#   ./score restore --set tuning
+#   ./score check
+#   ./score run --set tuning
+#   ./score --help
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON="$HERE/../../signals/backend/.venv/bin/python"
+if [[ ! -x "$PYTHON" ]]; then
+  echo "No backend venv at signals/backend/.venv. Create it as signals/backend/README.md says." >&2
+  exit 1
+fi
+cd "$HERE"
+exec "$PYTHON" -m scorer "$@"

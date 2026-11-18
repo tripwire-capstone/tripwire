@@ -1,0 +1,44 @@
+{
+  "runs": [
+    {
+      "id": "park1b",
+      "kind": "park",
+      "set": "tuning",
+      "dump": "~/tripwire-park-causes-1b.dump",
+      "db": "tripwire_park1b",
+      "answer_key": "~/projects/park_demo/runs/20261117-150338-park-causes-1b",
+      "laminar_raw": "eval/compare-laminar/runs/park-causes-1b/raw.json",
+      "notes": "Summaries in the dump are prompt v4 (run with --as-version 5 for the v5 baseline). raw.json was taken while Laminar was still catching up: its Laminar side may be incomplete."
+    },
+    {
+      "id": "park2",
+      "kind": "park",
+      "set": "tuning",
+      "dump": "~/tripwire-park-causes-2.dump",
+      "db": "tripwire_park2",
+      "answer_key": "~/projects/park_demo/runs/20261117-183040-park-causes-2",
+      "laminar_raw": "eval/compare-laminar/runs/park-causes-2/raw.json",
+      "notes": "Park seed 2, prompt v5, threshold 0.24."
+    },
+    {
+      "id": "park4",
+      "kind": "park",
+      "set": "tuning",
+      "dump": "~/tripwire-park-causes-4.dump",
+      "db": "tripwire_park4",
+      "answer_key": "~/projects/park_demo/runs/20261117-202453-park-causes-4",
+      "laminar_raw": "eval/compare-laminar/runs/park-causes-4/raw.json",
+      "notes": "Park seed 4, prompt v5, threshold 0.24."
+    },
+    {
+      "id": "tau1",
+      "kind": "tau",
+      "set": "tuning",
+      "dump": "~/tripwire-tau-v5-1.dump",
+      "db": "tripwire_tau1",
+      "answer_key": null,
+      "laminar_raw": "eval/compare-laminar/runs/tau-v5-1/raw.json",
+      "notes": "tau-bench retail, prompt v5, threshold 0.24. No per-turn answer key."
+    }
+  ]
+}
