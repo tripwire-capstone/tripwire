@@ -74,7 +74,7 @@ in `settings.py` and `signals/backend/.env.example`; set only what differs.
 | `CLUSTERER_MODE` | `real` | `placeholder` runs without OpenAI (skeleton stand-in) |
 | `CLUSTERER_INTERVAL_SECONDS` | 10 | |
 | `CLUSTER_PREPARE_BATCH` | 50 | |
-| `CLUSTER_ASSIGN_THRESHOLD` | 0.18 | calibrated Nov 17 (was 0.30); must be in (0, 1] |
+| `CLUSTER_ASSIGN_THRESHOLD` | 0.24 | calibrated Nov 17 with summarizer v5 (was 0.30); must be in (0, 1] |
 | `CLUSTER_MIN_EVENTS` / `CLUSTER_MIN_CONVERSATIONS` | 3 / 2 | conversations can't exceed events |
 | `CLUSTER_POOL_WINDOW_DAYS` | 14 | |
 | `CLUSTER_HEALTH_STALL_MINUTES` / `CLUSTER_HEALTH_FAILURE_RUN` | 15 / 10 | Q12's two rules |

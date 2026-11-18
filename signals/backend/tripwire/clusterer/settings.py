@@ -54,16 +54,18 @@ DEFAULTS = {
     "CLUSTERER_MODE": ("real", str),
     "CLUSTERER_INTERVAL_SECONDS": (10.0, float),
     "CLUSTER_PREPARE_BATCH": (50, int),
-    # Calibrated Nov 17 on park run park-causes-1b (416 traces, report --sweep): Issues F0.5 is
-    # flat 0.16-0.20 (0.68-0.69, P 0.85 at 0.18) vs 0.50 at 0.30, which made one cluster mixing
-    # every cause. Middle of the flat top, not the edge. Re-check after summarizer v5.
-    "CLUSTER_ASSIGN_THRESHOLD": (0.18, float),
+    # Calibrated Nov 17 on park run park-causes-1b (416 traces, report --sweep): 0.18 for summarizer
+    # v4, then 0.24 with v5 (v5 summaries sit further apart). With v5, F0.5 is near its best for
+    # Issues (0.80, per-turn labels) and User frustration (0.87, so-far labels) at 0.24-0.26;
+    # frustration drops to 0.63 by 0.30, so 0.24 stays on the safe side (smaller clusters, not
+    # merged causes). v4 at 0.30 made one cluster mixing every cause.
+    "CLUSTER_ASSIGN_THRESHOLD": (0.24, float),
     "CLUSTER_MIN_EVENTS": (3, int),
     "CLUSTER_MIN_CONVERSATIONS": (2, int),
     "CLUSTER_POOL_WINDOW_DAYS": (14, int),
     "STUB_CLUSTER_RATE": (0.5, float),
     "SUMMARIZER_MODEL": ("gpt-6-luna", str),
-    "SUMMARIZER_PROMPT_VERSION": (4, int),
+    "SUMMARIZER_PROMPT_VERSION": (5, int),       # v5 (Nov 17): leads with the cause, not the reaction
     "CLUSTER_HEALTH_STALL_MINUTES": (15, int),
     "CLUSTER_HEALTH_FAILURE_RUN": (10, int),
     "CLUSTER_HEALTH_ALIVE_MINUTES": (3.0, float),
