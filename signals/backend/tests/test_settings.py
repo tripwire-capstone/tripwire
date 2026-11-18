@@ -99,6 +99,18 @@ def test_summarizer_defaults_to_gpt_6_luna_and_prompt_version_5():
     assert (settings.summarizer_model, settings.summarizer_prompt_version) == ("gpt-6-luna", 5)
 
 
+def test_summary_threads_defaults_to_four_and_accepts_one():
+    # 1 = one summary at a time, the behavior before SIG-111.
+    assert load_settings(BASE).summary_threads == 4
+    assert settings_with(CLUSTERER_SUMMARY_THREADS=1).summary_threads == 1
+
+
+def test_summary_threads_must_be_at_least_one():
+    for value in (0, -1):
+        assert f"CLUSTERER_SUMMARY_THREADS must be at least 1, got {value}" in problem_with(
+            CLUSTERER_SUMMARY_THREADS=value)
+
+
 def test_load_settings_rejects_a_prompt_version_with_no_prompt_files():
     message = problem_with(SUMMARIZER_PROMPT_VERSION=12)
     assert "SUMMARIZER_PROMPT_VERSION=12 has no prompt files" in message

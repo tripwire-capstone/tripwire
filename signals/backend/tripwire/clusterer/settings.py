@@ -40,6 +40,7 @@ class ClustererSettings:
     stub_cluster_rate: float   # STUB_CLUSTER_RATE: placeholder mode only
     summarizer_model: str      # SUMMARIZER_MODEL: the model that writes event summaries (Q19)
     summarizer_prompt_version: int  # SUMMARIZER_PROMPT_VERSION: which prompts/summarize_vN to use
+    summary_threads: int       # CLUSTERER_SUMMARY_THREADS: summaries requested at once (SIG-111)
     health_stall_minutes: int  # CLUSTER_HEALTH_STALL_MINUTES: rule 1, a live event waiting longer (Q12)
     health_failure_run: int    # CLUSTER_HEALTH_FAILURE_RUN: rule 2, this many summaries in a row failed
     health_alive_minutes: float  # CLUSTER_HEALTH_ALIVE_MINUTES: --alive fails if no pass for longer
@@ -66,6 +67,7 @@ DEFAULTS = {
     "STUB_CLUSTER_RATE": (0.5, float),
     "SUMMARIZER_MODEL": ("gpt-6-luna", str),
     "SUMMARIZER_PROMPT_VERSION": (5, int),       # v5 (Nov 17): leads with the cause, not the reaction
+    "CLUSTERER_SUMMARY_THREADS": (4, int),       # SIG-111; 1 = one at a time (the behavior before Nov 17)
     "CLUSTER_HEALTH_STALL_MINUTES": (15, int),
     "CLUSTER_HEALTH_FAILURE_RUN": (10, int),
     "CLUSTER_HEALTH_ALIVE_MINUTES": (3.0, float),
@@ -110,7 +112,7 @@ def load_settings(environ=None):
           f"CLUSTERER_INTERVAL_SECONDS must be more than 0, got {values['CLUSTERER_INTERVAL_SECONDS']}")
     for name in ("CLUSTER_PREPARE_BATCH", "CLUSTER_MIN_EVENTS", "CLUSTER_MIN_CONVERSATIONS",
                  "CLUSTER_POOL_WINDOW_DAYS", "CLUSTER_HEALTH_STALL_MINUTES",
-                 "CLUSTER_HEALTH_FAILURE_RUN"):
+                 "CLUSTER_HEALTH_FAILURE_RUN", "CLUSTERER_SUMMARY_THREADS"):
         check(values[name] >= 1, f"{name} must be at least 1, got {values[name]}")
     # Each conversation in a new cluster brings at least one event, so a cluster could never
     # form if it needed more conversations than events.
@@ -156,6 +158,7 @@ def load_settings(environ=None):
         stub_cluster_rate=values["STUB_CLUSTER_RATE"],
         summarizer_model=values["SUMMARIZER_MODEL"],
         summarizer_prompt_version=version,
+        summary_threads=values["CLUSTERER_SUMMARY_THREADS"],
         health_stall_minutes=values["CLUSTER_HEALTH_STALL_MINUTES"],
         health_failure_run=values["CLUSTER_HEALTH_FAILURE_RUN"],
         health_alive_minutes=values["CLUSTER_HEALTH_ALIVE_MINUTES"],

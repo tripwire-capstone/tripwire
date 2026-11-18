@@ -13,6 +13,7 @@ from tripwire.clusterer.summarize import (
     EventInput,
     Row,
     build_messages,
+    call_summarizer,
     clean_details,
     decide,
     field_descriptions,
@@ -366,6 +367,26 @@ def test_summarize_event_lets_our_own_bugs_through_and_leaves_the_row_alone(conn
     with pytest.raises(KeyError):
         summarize_event(conn, Broken(), event_id, "gpt-6-luna", load_prompt(1), NOW)
     assert conn.execute("SELECT count(*) FROM event_summaries").fetchone()[0] == 0
+
+
+def test_call_summarizer_returns_an_llm_error_as_the_outcome():
+    # A timeout or rate limit is the call's outcome (decide() judges it), so the parallel runner
+    # reports it as an outcome, not as a bug.
+    class RateLimited:
+        def complete(self, model, messages, json_schema):
+            raise LLMServiceError("rate limited")
+
+    outcome = call_summarizer(RateLimited(), "gpt-6-luna", [], {})
+    assert isinstance(outcome, LLMServiceError)
+
+
+def test_call_summarizer_raises_our_own_bugs():
+    class Broken:
+        def complete(self, model, messages, json_schema):
+            raise KeyError("a bug in our code")
+
+    with pytest.raises(KeyError):
+        call_summarizer(Broken(), "gpt-6-luna", [], {})
 
 
 def test_details_are_saved_as_a_json_list(conn):

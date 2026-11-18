@@ -123,6 +123,7 @@ responses.
 | `CLUSTER_HEALTH_FAILURE_RUN` | 10 | Q12 |
 | `SUMMARIZER_MODEL` | `gpt-6-luna` | Q3, Q4; summarizer below |
 | `SUMMARIZER_PROMPT_VERSION` | 5 (needs `prompts/summarize_v5.md` + `.schema.json`; v4 added `details`; v5 leads with the cause, not the reaction, and drops the area suffix) | summarizer below |
+| `CLUSTERER_SUMMARY_THREADS` | 4 (1 = one summary at a time, the behavior before SIG-111) | SIG-111 |
 | `CLUSTER_HEALTH_ALIVE_MINUTES` | 3 | Q12 (`--alive`) |
 | `CLUSTERER_LAST_PASS_FILE` | `/tmp/clusterer-last-pass` | Q12 (`--alive`) |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` (1536 dims, one model only) | existing |

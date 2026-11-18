@@ -1,17 +1,21 @@
 """Tests for the clusterer's prepare step (summarize + embed new events) and its wiring into the loop."""
 
+import logging
+import re
+import threading
 from datetime import datetime, timedelta, timezone
 
+import psycopg
 import pytest
 
 from tests.clustering_data import add_event, add_failed_summary, add_signal, add_summary
 from tripwire.clusterer import prepare as prepare_module
 from tripwire.clusterer.embed import FakeEmbedder
-from tripwire.clusterer.llm_client import FakeLLM
+from tripwire.clusterer.llm_client import FakeLLM, LLMResult
 from tripwire.clusterer.loop import run_pass
 from tripwire.clusterer.prepare import Preparer
 from tripwire.clusterer.settings import load_settings
-from tripwire.llm import LLMBadOutput, LLMServiceError
+from tripwire.llm import LLMBadOutput, LLMServiceError, LLMUsage
 
 NOW = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
 GOOD = {"cause": "assistant reply", "summary": "The assistant gives a wrong answer, in booking."}
@@ -54,17 +58,17 @@ def test_live_events_go_before_backfill_then_oldest_first(conn):
     live_old = unembedded_event(conn, version_id, created_minutes_ago=30)
 
     seen = []
-    original = prepare_module.summarize_event
+    original = prepare_module.start_summary
 
-    def recording(conn_, llm, event_id, *args):
+    def recording(conn_, event_id, *args):
         seen.append(event_id)
-        return original(conn_, llm, event_id, *args)
+        return original(conn_, event_id, *args)
 
-    prepare_module.summarize_event = recording
+    prepare_module.start_summary = recording
     try:
         preparer(FakeLLM([GOOD] * 3)).prepare_events(conn, 10)
     finally:
-        prepare_module.summarize_event = original
+        prepare_module.start_summary = original
     assert seen == [live_old, live_new, backfill_old]
 
 
@@ -211,6 +215,200 @@ def test_if_even_saving_the_crash_fails_the_event_is_skipped_until_restart(conn,
     calls_before = worker.llm.calls
     worker.prepare_events(conn, 10)
     assert worker.llm.calls == calls_before            # skipped, not retried every pass
+
+
+# ------------------------------------------------------------------ several summaries at once (SIG-111)
+
+BARRIER_TIMEOUT = 5   # seconds; only reached when a chunk's calls are NOT running at the same time
+
+
+class EventLLM:
+    """A fake model that answers by event, so it's safe from several threads at once.
+
+    FakeLLM plays back one script in order: with 4 threads, which call gets which answer would
+    depend on timing. Here each event's prompt names the event (labelled_events), and `answers`
+    maps an event ID to its answer (an output dict, or an exception to raise); others get GOOD.
+    `barrier`: every call waits until the whole chunk has arrived, which proves the calls overlap.
+    `on_call(event_id)`: runs during the call (e.g. to move a fake clock).
+    """
+
+    def __init__(self, answers=None, barrier=None, on_call=None):
+        self.answers = answers or {}
+        self.barrier = barrier
+        self.on_call = on_call
+        self.calls = []            # event IDs, in the order the calls started
+        self.peak = 0              # most calls in flight at the same time
+        self._running = 0
+        self._lock = threading.Lock()
+
+    def complete(self, model, messages, json_schema):
+        event_id = int(re.search(r"tripwire-test-event-(\d+)", messages[1]["content"]).group(1))
+        with self._lock:
+            self.calls.append(event_id)
+            self._running += 1
+            self.peak = max(self.peak, self._running)
+        try:
+            if self.barrier:
+                self.barrier.wait()
+            if self.on_call:
+                self.on_call(event_id)
+            answer = self.answers.get(event_id, GOOD)
+            if isinstance(answer, Exception):
+                raise answer
+            return LLMResult(output=answer, usage=LLMUsage(100, 0, 20, 0.00002))
+        finally:
+            with self._lock:
+                self._running -= 1
+
+
+def labelled_events(conn, version_id, count):
+    """`count` unprepared events, oldest first, each named in its own prompt (for EventLLM)."""
+    ids = [unembedded_event(conn, version_id, created_minutes_ago=count - index) for index in range(count)]
+    for event_id in ids:
+        conn.execute("UPDATE signal_events SET description = %s WHERE id = %s",
+                     (f"tripwire-test-event-{event_id}", event_id))
+    return ids
+
+
+def preparer_with_threads(llm, threads=4, clock=None, embedder=None):
+    return Preparer(llm, embedder or FakeEmbedder(), "gpt-6-luna", 1, threads=threads,
+                    clock=clock or FakeClock(), now=lambda: NOW)
+
+
+def summary_rows(conn):
+    """event ID -> (status, error_kind) for every summary row."""
+    return {row[0]: (row[1], row[2]) for row in conn.execute(
+        "SELECT event_id, status, error_kind FROM event_summaries")}
+
+
+def test_four_threads_run_a_chunk_of_four_calls_at_once_oldest_events_first(conn):
+    _, version_id = add_signal(conn)
+    ids = labelled_events(conn, version_id, 8)
+    llm = EventLLM(barrier=threading.Barrier(4, timeout=BARRIER_TIMEOUT))
+
+    counts = preparer_with_threads(llm).prepare_events(conn, 50)
+    assert llm.peak == 4                                # all 4 waited at the barrier together
+    assert set(llm.calls[:4]) == set(ids[:4])           # chunk 1 = the 4 oldest events
+    assert counts == {"summarized": 8, "embedded": 8}
+
+
+def test_a_service_error_mid_chunk_saves_the_whole_chunk_and_starts_no_more_chunks(conn):
+    _, version_id = add_signal(conn)
+    ids = labelled_events(conn, version_id, 10)
+    rate_limited = ids[5]                               # 6th event: chunk 2 (events 5-8)
+    llm = EventLLM({rate_limited: LLMServiceError("rate limited")})
+
+    counts = preparer_with_threads(llm).prepare_events(conn, 50)
+    assert sorted(llm.calls) == sorted(ids[:8])         # chunks 1 and 2 only
+    rows = summary_rows(conn)
+    assert rows[rate_limited] == ("pending", "service")
+    assert all(rows[event_id] == ("done", None) for event_id in ids[:8] if event_id != rate_limited)
+    assert ids[8] not in rows and ids[9] not in rows    # never tried: picked up next pass
+    assert counts == {"summarized": 7, "retrying": 1, "left_for_next_pass": 2, "embedded": 7}
+
+
+def test_two_service_errors_in_one_chunk_still_stop_once(conn):
+    _, version_id = add_signal(conn)
+    ids = labelled_events(conn, version_id, 10)
+    llm = EventLLM({ids[0]: LLMServiceError("rate limited"), ids[2]: LLMServiceError("rate limited")})
+
+    counts = preparer_with_threads(llm).prepare_events(conn, 50)
+    assert sorted(llm.calls) == sorted(ids[:4])
+    assert counts == {"summarized": 2, "retrying": 2, "left_for_next_pass": 6, "embedded": 2}
+
+
+def test_the_time_budget_is_checked_before_each_chunk(conn):
+    _, version_id = add_signal(conn)
+    ids = labelled_events(conn, version_id, 12)
+    clock = FakeClock()
+    lock = threading.Lock()
+
+    def each_chunk_takes_45_seconds(event_id):
+        with lock:
+            clock.seconds += 45 / 4
+
+    llm = EventLLM(on_call=each_chunk_takes_45_seconds)
+    counts = preparer_with_threads(llm, clock=clock).prepare_events(conn, 50)
+    # Chunk 1 ends at 45 s; chunk 2 starts (45 < 60) and ends at 90 s; chunk 3 never starts.
+    assert sorted(llm.calls) == sorted(ids[:8])
+    assert (counts["summarized"], counts["left_for_next_pass"]) == (8, 4)
+
+
+def test_a_bug_in_one_call_crashes_only_that_event(conn, caplog):
+    _, version_id = add_signal(conn)
+    ids = labelled_events(conn, version_id, 6)
+    buggy = ids[1]
+    llm = EventLLM({buggy: KeyError("reason")})
+
+    counts = preparer_with_threads(llm).prepare_events(conn, 50)
+    rows = summary_rows(conn)
+    assert rows[buggy] == ("failed", "crashed")
+    assert all(rows[event_id] == ("done", None) for event_id in ids if event_id != buggy)
+    assert (counts["crashed"], counts["summarized"]) == (1, 5)   # chunk 2 still ran
+    assert "hit a bug in our code" in caplog.text and "KeyError" in caplog.text
+
+
+def test_a_bug_building_one_event_crashes_it_before_it_is_sent(conn, monkeypatch):
+    _, version_id = add_signal(conn)
+    ids = labelled_events(conn, version_id, 4)
+    buggy = ids[2]
+    original = prepare_module.start_summary
+
+    def broken_for_one(conn_, event_id, prompt):
+        if event_id == buggy:
+            raise ValueError("bug in build_messages")
+        return original(conn_, event_id, prompt)
+
+    monkeypatch.setattr(prepare_module, "start_summary", broken_for_one)
+    llm = EventLLM()
+    counts = preparer_with_threads(llm).prepare_events(conn, 50)
+    assert buggy not in llm.calls                       # never sent, never paid for
+    assert sorted(llm.calls) == sorted(set(ids) - {buggy})
+    assert summary_rows(conn)[buggy] == ("failed", "crashed")
+    assert (counts["crashed"], counts["summarized"]) == (1, 3)
+
+
+def test_a_database_outage_mid_chunk_ends_the_step_and_later_results_are_lost(conn):
+    # Agreed trade-off: results are saved in chunk order, so one saved before the outage stays
+    # saved; the ones after it were paid for but are lost (summarized again next pass).
+    _, version_id = add_signal(conn)
+    ids = labelled_events(conn, version_id, 4)
+    llm = EventLLM({ids[1]: psycopg.OperationalError("server closed the connection")})
+
+    with pytest.raises(psycopg.OperationalError):
+        preparer_with_threads(llm).prepare_events(conn, 50)
+    assert sorted(llm.calls) == sorted(ids)             # all 4 calls were made
+    assert set(summary_rows(conn)) == {ids[0]}          # only the one before the outage was saved
+
+
+def test_every_event_summarized_in_a_pass_is_embedded_in_that_pass_with_no_thread_left(conn):
+    # The notifier's assumption: an event's embedding is saved, then assign places it, in the
+    # same pass. So nothing may still be running when prepare_events returns.
+    _, version_id = add_signal(conn)
+    labelled_events(conn, version_id, 10)
+    threads_before = threading.active_count()
+
+    counts = preparer_with_threads(EventLLM()).prepare_events(conn, 50)
+    assert threading.active_count() == threads_before
+    done = {row[0] for row in conn.execute("SELECT event_id FROM event_summaries WHERE status = 'done'")}
+    embedded = {row[0] for row in conn.execute("SELECT event_id FROM event_embeddings")}
+    assert done == embedded and len(done) == 10
+    assert counts == {"summarized": 10, "embedded": 10}
+
+
+def test_one_timing_line_per_chunk(conn, caplog):
+    _, version_id = add_signal(conn)
+    labelled_events(conn, version_id, 10)
+    with caplog.at_level(logging.INFO, logger="clusterer.prepare"):
+        preparer_with_threads(EventLLM()).prepare_events(conn, 50)
+    lines = [record.getMessage() for record in caplog.records if "summaries in" in record.getMessage()]
+    assert [line.split(" summaries in")[0] for line in lines] == ["prepare: 4", "prepare: 4", "prepare: 2"]
+    assert all("slowest call" in line and "average" in line for line in lines)
+
+
+def test_preparer_refuses_fewer_than_one_thread():
+    with pytest.raises(ValueError, match="threads must be at least 1, got 0"):
+        preparer_with_threads(EventLLM(), threads=0)
 
 
 # ------------------------------------------------------------------ embedding
