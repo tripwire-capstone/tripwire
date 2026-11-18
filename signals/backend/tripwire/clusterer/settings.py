@@ -40,6 +40,7 @@ class ClustererSettings:
     stub_cluster_rate: float   # STUB_CLUSTER_RATE: placeholder mode only
     summarizer_model: str      # SUMMARIZER_MODEL: the model that writes event summaries (Q19)
     summarizer_prompt_version: int  # SUMMARIZER_PROMPT_VERSION: which prompts/summarize_vN to use
+    summary_threads: int       # CLUSTERER_SUMMARY_THREADS: summaries requested at once (SIG-111)
     health_stall_minutes: int  # CLUSTER_HEALTH_STALL_MINUTES: rule 1, a live event waiting longer (Q12)
     health_failure_run: int    # CLUSTER_HEALTH_FAILURE_RUN: rule 2, this many summaries in a row failed
     health_alive_minutes: float  # CLUSTER_HEALTH_ALIVE_MINUTES: --alive fails if no pass for longer
@@ -54,13 +55,19 @@ DEFAULTS = {
     "CLUSTERER_MODE": ("real", str),
     "CLUSTERER_INTERVAL_SECONDS": (10.0, float),
     "CLUSTER_PREPARE_BATCH": (50, int),
-    "CLUSTER_ASSIGN_THRESHOLD": (0.30, float),   # temporary until calibrated (Q14)
+    # Calibrated Nov 17 on park run park-causes-1b (416 traces, report --sweep): 0.18 for summarizer
+    # v4, then 0.24 with v5 (v5 summaries sit further apart). With v5, F0.5 is near its best for
+    # Issues (0.80, per-turn labels) and User frustration (0.87, so-far labels) at 0.24-0.26;
+    # frustration drops to 0.63 by 0.30, so 0.24 stays on the safe side (smaller clusters, not
+    # merged causes). v4 at 0.30 made one cluster mixing every cause.
+    "CLUSTER_ASSIGN_THRESHOLD": (0.24, float),
     "CLUSTER_MIN_EVENTS": (3, int),
     "CLUSTER_MIN_CONVERSATIONS": (2, int),
     "CLUSTER_POOL_WINDOW_DAYS": (14, int),
     "STUB_CLUSTER_RATE": (0.5, float),
     "SUMMARIZER_MODEL": ("gpt-6-luna", str),
-    "SUMMARIZER_PROMPT_VERSION": (4, int),
+    "SUMMARIZER_PROMPT_VERSION": (5, int),       # v5 (Nov 17): leads with the cause, not the reaction
+    "CLUSTERER_SUMMARY_THREADS": (4, int),       # SIG-111; 1 = one at a time (the behavior before Nov 17)
     "CLUSTER_HEALTH_STALL_MINUTES": (15, int),
     "CLUSTER_HEALTH_FAILURE_RUN": (10, int),
     "CLUSTER_HEALTH_ALIVE_MINUTES": (3.0, float),
@@ -105,7 +112,7 @@ def load_settings(environ=None):
           f"CLUSTERER_INTERVAL_SECONDS must be more than 0, got {values['CLUSTERER_INTERVAL_SECONDS']}")
     for name in ("CLUSTER_PREPARE_BATCH", "CLUSTER_MIN_EVENTS", "CLUSTER_MIN_CONVERSATIONS",
                  "CLUSTER_POOL_WINDOW_DAYS", "CLUSTER_HEALTH_STALL_MINUTES",
-                 "CLUSTER_HEALTH_FAILURE_RUN"):
+                 "CLUSTER_HEALTH_FAILURE_RUN", "CLUSTERER_SUMMARY_THREADS"):
         check(values[name] >= 1, f"{name} must be at least 1, got {values[name]}")
     # Each conversation in a new cluster brings at least one event, so a cluster could never
     # form if it needed more conversations than events.
@@ -151,6 +158,7 @@ def load_settings(environ=None):
         stub_cluster_rate=values["STUB_CLUSTER_RATE"],
         summarizer_model=values["SUMMARIZER_MODEL"],
         summarizer_prompt_version=version,
+        summary_threads=values["CLUSTERER_SUMMARY_THREADS"],
         health_stall_minutes=values["CLUSTER_HEALTH_STALL_MINUTES"],
         health_failure_run=values["CLUSTER_HEALTH_FAILURE_RUN"],
         health_alive_minutes=values["CLUSTER_HEALTH_ALIVE_MINUTES"],

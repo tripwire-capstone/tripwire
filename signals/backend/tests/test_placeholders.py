@@ -2,18 +2,27 @@
 
 import uuid
 
-import pytest
-
 from tripwire.clusterer.cluster import cluster_step
-from tripwire.judge.config import JudgeModelConfigError
 from tripwire.placeholder import picked
 from tripwire.runner.run import run_step
 from tripwire.seed import seed
 
 
 def seeded(conn):
+    """The seeded project plus one active signal (the seed itself makes no signals)."""
     seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh")
-    return conn.execute("SELECT id FROM projects WHERE name = 'default'").fetchone()[0]
+    project_id = conn.execute("SELECT id FROM projects WHERE name = 'default'").fetchone()[0]
+    add_signal(conn, project_id)
+    return project_id
+
+
+def add_signal(conn, project_id, name="Test signal"):
+    """A signal with version 1, the way the API would store one."""
+    signal_id = conn.execute("INSERT INTO signals (project_id, name) VALUES (%s, %s) RETURNING id",
+                             (project_id, name)).fetchone()[0]
+    conn.execute("""INSERT INTO signal_versions (signal_id, version_number, instruction, output_schema, model)
+                    VALUES (%s, 1, 'Flag frustrated users.', '[]', 'gpt-6-luna')""", (signal_id,))
+    return signal_id
 
 
 def add_traces(conn, project_id, n):
@@ -40,29 +49,15 @@ def count(conn, table):
 
 # ------------------------------------------------------------------ seed
 
-def test_seed_creates_project_signal_and_version_once_and_no_cluster(conn, monkeypatch):
-    assert seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh")
+def test_seed_creates_only_the_project_once(conn, monkeypatch):
+    # No signal means no model to pick, so the seed works without JUDGE_DEFAULT_MODEL
     monkeypatch.delenv("JUDGE_DEFAULT_MODEL")
+    assert seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh")
     assert not seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh")
-    assert [count(conn, t) for t in ("signals", "signal_versions", "clusters")] == [1, 1, 0]
-    assert conn.execute("SELECT model FROM signal_versions").fetchone()[0] == "gpt-6-luna"
+    assert [count(conn, t) for t in ("signals", "signal_versions", "clusters")] == [0, 0, 0]
     keys = conn.execute("SELECT laminar_api_key_encrypted, laminar_api_key_hint, openai_api_key_encrypted, "
                         "openai_api_key_hint FROM projects WHERE name = 'default'").fetchone()
     assert keys == (None, None, None, None)   # no saved keys: the workers use their environment
-
-
-@pytest.mark.parametrize("configured", [None, "placeholder"])
-def test_fresh_seed_requires_a_model_before_writing(conn, monkeypatch, configured):
-    if configured is None:
-        monkeypatch.delenv("JUDGE_DEFAULT_MODEL")
-    else:
-        monkeypatch.setenv("JUDGE_DEFAULT_MODEL", configured)
-
-    with pytest.raises(JudgeModelConfigError, match="JUDGE_DEFAULT_MODEL"):
-        seed(conn, api_url="https://api.lmnr.ai", ui_url="https://laminar.sh")
-    assert [count(conn, t) for t in ("projects", "signals", "signal_versions", "clusters")] == [
-        1, 0, 0, 0,
-    ]
 
 
 # ------------------------------------------------------------------ runner

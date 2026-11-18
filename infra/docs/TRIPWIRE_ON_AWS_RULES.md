@@ -6,7 +6,7 @@
 
 - **Local development works as before.** `docker compose up --build` in `signals/backend`, UI with `npm run dev` on `:5174`, API on `:8080` at `/api/...`, same `.env`. After pulling a new migration, reset the local database (`docker compose down -v`, see [rule 3](#3-migrations-every-change-is-a-new-file)); after a new UI package, run `npm install` in `signals/mock-ui`.
 - **On AWS**, Tripwire lives under Laminar's address: `https://<laminar-host>/tripwire/`. Laminar's own "Signals" sidebar item leads there.
-- **One image** (backend code + built UI) runs as **four ECS services**: poller, runner, clusterer, and the API, which also serves the UI.
+- **One image** (backend code + built UI) runs as **five ECS services**: poller, runner, clusterer, notifier (Slack alerts), and the API, which also serves the UI.
 - Tripwire's data is in its **own `tripwire` database on Laminar's RDS instance**. A one-off **migration task** prepares it on every deploy.
 - **Three habits** keep code working on AWS: see [Rules](#rules).
 
@@ -17,7 +17,7 @@ Browser ──► load balancer (Cognito login)
               ├─ /tripwire/*            ──► Tripwire API container (UI + /api)
               ├─ /project/*/signals*    ──► redirect to /tripwire/signals
               └─ everything else        ──► Laminar
-Tripwire's poller / runner / clusterer ──► Laminar's API inside the VPC, RDS (tripwire database), OpenAI
+Tripwire's poller / runner / clusterer / notifier ──► Laminar's API inside the VPC, RDS (tripwire database), OpenAI
 ```
 
 - **Path prefix.** The load balancer sends everything under `/tripwire/` to the API container. `tripwire/api/serve.py` strips the prefix, so `app.py` still sees `/api/...`. Every other path under `/tripwire/` gets the UI (the router handles it in the browser).
@@ -44,7 +44,7 @@ Tripwire's poller / runner / clusterer ──► Laminar's API inside the VPC, R
 2. **Starting Laminar.**
 3. **Starting Tripwire**:
    - **Database:** the migration task runs once and must succeed.
-   - **Then the services:** a second, quiet apply moves them to the new image, and the CLI waits for **Dashboard** (the API) and **Backend** (poller, runner, clusterer) to run.
+   - **Then the services:** a second, quiet apply moves them to the new image, and the CLI waits for **Dashboard** (the API) and **Backend** (poller, runner, clusterer, notifier) to run.
 4. Deletes the two keys older deploys stored in SSM, if they're still there (once).
 5. Shows both URLs, then **Connect Tripwire**: sign in to Laminar, create a project API key, and add it and an OpenAI key in Tripwire → Settings. Until then Tripwire shows "Not connected yet" and the workers wait (no crash, no alarm).
 
@@ -93,6 +93,7 @@ On AWS the database keeps its data across deploys. So the migration task records
 
 - **New API routes go under `/api/...`.** `serve.py` only sends paths starting with `/api` to the API; anything else under `/tripwire/` gets the UI page. An MCP endpoint, for example, belongs at `/api/mcp`: `localhost:8080/api/mcp` locally and `/tripwire/api/mcp` on AWS.
 - **Endpoints that programs call** (MCP clients, webhooks) can't get past the Cognito login page. They need their own load balancer rule that skips Cognito, at a priority before Tripwire's rule (25), for example 23. The endpoint then checks a token itself. Ask whoever owns the infra; it's a few lines in `tripwire.tf`. Laminar's `/v1/*` works the same way today.
+  Tripwire's MCP server works this way: it's inside the API at `/tripwire/api/mcp`, the `tripwire_mcp` rule (23) skips Cognito for it and for its login document (`/.well-known/oauth-protected-resource/tripwire/api/mcp`, at the host's root), and it checks Cognito access tokens itself. See `signals/backend/MCP.md`.
 - **A new worker** runs from the same image with a different start command. Add it to `local.tripwire_services` in `tripwire.tf`, to `TRIPWIRE` in `cli/src/aws/ecs.ts` (so `tripwire deploy` waits for it), and to the Backend row in `cli/src/ui/tripwireRows.ts`.
   - **Secrets:** `["database_url", "secret_key"]`, like the other workers. `secret_key` (`TRIPWIRE_SECRET_KEY`) is what decrypts keys saved on the Settings page.
   - **Keys it uses** (OpenAI, Laminar, a Slack webhook): read them through `tripwire/project_keys.py` on every loop, and with no key, wait or skip instead of crashing (the rules are in `env_to_db_changes.md`).

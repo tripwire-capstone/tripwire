@@ -6,8 +6,12 @@ On AWS, Tripwire lives under Laminar's address at /tripwire/ (the load balancer 
 here). This app strips the prefix, so the API in app.py still sees /api/...; everything else under
 the prefix is the built UI, with index.html for any page address (the UI routes in the browser).
 
-Locally, docker compose runs app.py directly (no prefix, UI from the Vite dev server), so nothing
+Locally, docker compose runs asgi.py directly (no prefix, UI from the Vite dev server), so nothing
 here changes local development. app.py itself is not modified.
+
+The API comes with the MCP server inside it (asgi.py). MCP clients look for its login document at
+the host's root (/.well-known/oauth-protected-resource/tripwire/api/mcp), outside the prefix, so
+that path is passed to the API too.
 
 Settings (env):
   TRIPWIRE_BASE_PATH  the prefix, e.g. "/tripwire"; empty = serve at the root
@@ -22,7 +26,7 @@ from starlette.responses import HTMLResponse, PlainTextResponse, RedirectRespons
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from .app import app as api_app
+from ..mcp_server.server import LOGIN_DOCUMENT_PREFIX
 
 BASE_TAG = '<base href="/" />'
 
@@ -47,7 +51,7 @@ def route_path(scope):
     return path[len(root_path):] if root_path and path.startswith(root_path) else path
 
 
-def build_site(ui_dir, base_path):
+def build_site(ui_dir, base_path, api_app):
     """One ASGI app for everything under the prefix: /api/... to the API, the rest to the UI."""
     ui_dir = Path(ui_dir)
     index_file = ui_dir / "index.html"
@@ -75,16 +79,30 @@ def build_site(ui_dir, base_path):
     return site
 
 
-def build_app(ui_dir, base_path):
+def build_app(ui_dir, base_path, api_app=None):
+    """`api_app` defaults to the API with MCP (asgi.py); tests pass their own."""
+    if api_app is None:
+        from .asgi import app as api_app
     base_path = normalize_base_path(base_path)
-    site = build_site(ui_dir, base_path)
+    site = build_site(ui_dir, base_path, api_app)
     if not base_path:
         return site
 
     async def to_prefix(request):
         return RedirectResponse(f"{base_path}/")
 
-    return Starlette(routes=[Route(base_path, to_prefix), Mount(base_path, app=site)])
+    prefixed = Starlette(routes=[Route(base_path, to_prefix), Mount(base_path, app=site)])
+
+    async def app(scope, receive, send):
+        # Startup and shutdown reach the API (Mount doesn't pass them on), and so does the MCP
+        # login document, which lives outside the prefix
+        if scope["type"] == "lifespan" or (
+                scope["type"] == "http" and scope["path"].startswith(LOGIN_DOCUMENT_PREFIX)):
+            await api_app(scope, receive, send)
+            return
+        await prefixed(scope, receive, send)
+
+    return app
 
 
 app = build_app(os.environ.get("TRIPWIRE_UI_DIR", "/app/ui"), os.environ.get("TRIPWIRE_BASE_PATH", ""))

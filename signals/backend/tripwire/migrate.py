@@ -8,7 +8,7 @@ Every step is safe to run again:
      database owned by it, and enable pgvector there (needs the master user's rights on RDS).
   2. As the tripwire user: apply each file in migrations/ that isn't recorded yet in
      schema_migrations, in name order, each in its own transaction with its record.
-  3. Seed the first project and signal (tripwire/seed.py; does nothing if already seeded).
+  3. Seed the project (tripwire/seed.py; does nothing if already seeded).
 
 Files are recorded by name: never edit or rename a migration once it has been deployed, add a new
 one (infra/docs/TRIPWIRE_ON_AWS_RULES.md). Exits 0 on success, 1 on failure; passwords are never

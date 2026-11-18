@@ -6,11 +6,15 @@ because it keeps things between passes: the OpenAI clients and, as a last resort
 
 One pass of prepare_events():
   1. Summarize events that need it (no summary row yet, or `pending` with its wait over),
-     live before backfill, then oldest first. One call per event.
-     - Stops starting new summaries after TIME_BUDGET (the loop's --alive check restarts the
+     live before backfill, then oldest first. One call per event, `threads` calls at a time
+     (CLUSTERER_SUMMARY_THREADS, SIG-111): the batch is cut into chunks of `threads` events; a
+     chunk's calls run at the same time and the next chunk starts when all of them have finished.
+     The database is only used on this thread (load before the calls, decide + save after).
+     - Stops starting new chunks after TIME_BUDGET (the loop's --alive check restarts the
        clusterer if no pass finishes for 3 minutes).
-     - Stops after a service error (rate limit, outage): the shared OpenAI key would only collect
-       more errors, and the judge uses the same key.
+     - Stops after a chunk with a service error (rate limit, outage): the shared OpenAI key would
+       only collect more errors, and the judge uses the same key. The chunk's other results are
+       still saved.
      - An unexpected error (a bug in our code) is logged with its traceback and saved on the event
        as a `failed` summary with error_kind 'crashed' (migration 004), so it can't block the queue
        or be paid for again, and the health check doesn't warn about it forever. If the health
@@ -28,11 +32,17 @@ import psycopg
 
 from ..llm import LLMServiceError
 from .embed import save_embedding
-from .summarize import crash_update, load_prompt, load_row, save, summarize_event
+from .parallel import run_in_parallel
+from .summarize import (call_summarizer, crash_update, finish_summary, load_prompt, load_row, save,
+                        start_summary)
 
 log = logging.getLogger("clusterer.prepare")
 
 TIME_BUDGET_SECONDS = 60      # MVP constant (Q21)
+
+# A lost or broken database connection ends the step (the loop retries next pass); it's never
+# saved as a crashed summary, so an outage can't mark a whole batch as crashed.
+DATABASE_OUTAGES = (psycopg.OperationalError, psycopg.InterfaceError)
 
 # `source = 'backfill'` is false for live runs, and false sorts first: live before backfill.
 NEEDS_SUMMARY_SQL = """
@@ -59,12 +69,17 @@ LIMIT %(limit)s
 
 
 class Preparer:
-    def __init__(self, llm, embedder, model, prompt_version,
+    def __init__(self, llm, embedder, model, prompt_version, threads=1,
                  clock=time.monotonic, now=lambda: datetime.now(timezone.utc)):
+        if threads < 1:
+            raise ValueError(f"threads must be at least 1, got {threads}")
         self.llm = llm
         self.embedder = embedder
         self.model = model
         self.prompt = load_prompt(prompt_version)
+        # Summaries requested at once. 1 (tests' default) = one at a time, as before SIG-111;
+        # __main__ passes CLUSTERER_SUMMARY_THREADS (default 4).
+        self.threads = threads
         self.clock = clock            # for the time budget; tests pass a fake one
         self.now = now                # for waits and timestamps; tests pass a fixed time
         # Last resort only: events whose crash couldn't even be saved. Cleared on restart.
@@ -79,38 +94,76 @@ class Preparer:
 
     def _summarize(self, conn, limit, counts):
         started = self.clock()
+        # Skipped events (their crash couldn't be saved) wait for a restart, so they don't fill
+        # a chunk or count as left for the next pass.
         event_ids = [row[0] for row in conn.execute(
-            NEEDS_SUMMARY_SQL, {"now": self.now(), "limit": limit})]
+            NEEDS_SUMMARY_SQL, {"now": self.now(), "limit": limit}) if row[0] not in self.skipped]
 
-        for position, event_id in enumerate(event_ids):
+        for position in range(0, len(event_ids), self.threads):
             if self.clock() - started >= TIME_BUDGET_SECONDS:
                 counts["left_for_next_pass"] = len(event_ids) - position
                 log.info("prepare: time budget used; %d events left for the next pass",
                          len(event_ids) - position)
                 return
-            if event_id in self.skipped:
-                continue
-            try:
-                update = summarize_event(conn, self.llm, event_id, self.model, self.prompt, self.now())
-            except (psycopg.OperationalError, psycopg.InterfaceError):
-                # The database is unreachable, not a bug: end the step; the loop retries next pass.
-                # (A bad query or a broken table rule is a bug, so it's handled below as a crash.)
-                raise
-            except Exception as error:
-                log.exception("prepare: event %s hit a bug in our code; saved as a crashed summary",
-                              event_id)
-                self._record_crash(conn, event_id, error)
-                counts["crashed"] = counts.get("crashed", 0) + 1
-                continue
-
-            outcome = {"done": "summarized", "failed": "failed"}.get(update.status, "retrying")
-            counts[outcome] = counts.get(outcome, 0) + 1
-            if update.status == "pending" and update.error_kind == "service":
-                left = len(event_ids) - position - 1
+            chunk = event_ids[position:position + self.threads]
+            if self._summarize_chunk(conn, chunk, counts):
+                left = len(event_ids) - position - len(chunk)
                 counts["left_for_next_pass"] = left
                 log.warning("prepare: OpenAI service problem; stopping summaries for this pass "
                             "(%d events left)", left)
                 return
+
+    def _summarize_chunk(self, conn, chunk, counts):
+        """Summarize one chunk: build here, call at the same time, save here. Returns True if any
+        call hit a service error (the caller then starts no more chunks this pass)."""
+        # 1. This thread: each event's messages. A bug for one event crashes only that event.
+        jobs = []
+        for event_id in chunk:
+            try:
+                jobs.append((event_id, start_summary(conn, event_id, self.prompt)))
+            except DATABASE_OUTAGES:
+                raise
+            except Exception as error:
+                self._crashed(conn, event_id, error, counts)
+
+        # 2. The calls, all at the same time. Returns only when every call has finished.
+        results = run_in_parallel(
+            lambda job: call_summarizer(self.llm, self.model, job[1], self.prompt.schema),
+            jobs, self.threads, self.clock)
+
+        # 3. This thread, in chunk order: decide + save each outcome.
+        service_error = False
+        for (event_id, _), result in zip(jobs, results):
+            if isinstance(result.error, DATABASE_OUTAGES):
+                raise result.error
+            if result.error is not None:
+                self._crashed(conn, event_id, result.error, counts)
+                continue
+            try:
+                update = finish_summary(conn, event_id, result.outcome, self.model, self.prompt,
+                                        self.now())
+            except DATABASE_OUTAGES:
+                raise
+            except Exception as error:
+                self._crashed(conn, event_id, error, counts)
+                continue
+            outcome = {"done": "summarized", "failed": "failed"}.get(update.status, "retrying")
+            counts[outcome] = counts.get(outcome, 0) + 1
+            if update.status == "pending" and update.error_kind == "service":
+                service_error = True
+
+        if results:
+            seconds = [result.seconds for result in results]
+            # The chunk waits for its slowest call; slowest vs average shows the time lost to that.
+            log.info("prepare: %d summaries in %.1f s (slowest call %.1f s, average %.1f s)",
+                     len(results), max(seconds), max(seconds), sum(seconds) / len(seconds))
+        return service_error
+
+    def _crashed(self, conn, event_id, error, counts):
+        log.error("prepare: event %s hit a bug in our code; saved as a crashed summary", event_id,
+                  exc_info=error)
+        self._record_crash(conn, event_id, error)
+        counts["crashed"] = counts.get("crashed", 0) + 1
 
     def _record_crash(self, conn, event_id, error):
         try:

@@ -3,7 +3,6 @@
 export const FEATURES = {
   deleteSignals: false, // Row checkboxes and Delete on the Signals list
   appVersions: false, // App version markers, filter and column
-  templates: false, // Template tiles on the New signal form
   spanTrigger: false, // "When a specific span finishes"
   tokenFilter: false, // "Total tokens" filter
   spanAndTagFilters: false, // "Span names" and "Tags" filters

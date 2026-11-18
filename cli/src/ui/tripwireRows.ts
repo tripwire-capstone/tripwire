@@ -4,9 +4,9 @@ import type { Row } from "../types/progress.js";
 import type { TripwireStart } from "../types/tripwire.js";
 
 // What a user sees under "Starting Tripwire": the database, then the two parts they'd recognize.
-// Backend is the poller, runner and clusterer together; a user doesn't need those names.
+// Backend is the poller, runner, clusterer and notifier together; a user doesn't need those names.
 const DASHBOARD = "tripwire-api";
-const BACKEND = ["tripwire-poller", "tripwire-runner", "tripwire-clusterer"];
+const BACKEND = ["tripwire-poller", "tripwire-runner", "tripwire-clusterer", "tripwire-notifier"];
 
 // The slowest phase wins when several services are combined into one row
 const PHASE_ORDER: Phase[] = ["restarting", "downloading", "starting", "checking health", "healthy"];

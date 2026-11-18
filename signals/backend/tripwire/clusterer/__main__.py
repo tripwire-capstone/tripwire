@@ -118,7 +118,8 @@ class OpenAISteps:
             embedder = self.make_embedder(key.value)
             if self.preparer is None:
                 self.preparer = Preparer(llm, embedder, self.settings.summarizer_model,
-                                         self.settings.summarizer_prompt_version)
+                                         self.settings.summarizer_prompt_version,
+                                         threads=self.settings.summary_threads)
                 self.name = naming_step(self.settings, llm)
             else:
                 self.preparer.llm = llm

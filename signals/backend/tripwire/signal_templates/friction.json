@@ -1,0 +1,25 @@
+{
+  "name": "Friction Detector",
+  "short_name": "User friction",
+  "icon": "frown",
+  "description": "Identify user frustration and poor UX",
+  "output_schema": [
+    {
+      "name": "description",
+      "type": "string",
+      "description": "Description of the friction or frustration observed",
+      "nullable": false
+    },
+    {
+      "name": "severity",
+      "type": "enum",
+      "description": "Severity of the user friction",
+      "nullable": false,
+      "choices": [
+        "low",
+        "medium",
+        "high"
+      ]
+    }
+  ]
+}

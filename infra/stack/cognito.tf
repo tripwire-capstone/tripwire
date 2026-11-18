@@ -64,3 +64,45 @@ resource "aws_cognito_user" "laminar" {
     email_verified = true
   }
 }
+# MCP: coding agents (Claude Code and others) log users in to the Tripwire MCP server with this
+# pool. The scope marks a token as meant for the MCP server; a Laminar UI login doesn't carry it,
+# so it can't be used there.
+resource "aws_cognito_resource_server" "mcp" {
+  identifier   = "tripwire-mcp"
+  name         = "${var.name}-mcp"
+  user_pool_id = aws_cognito_user_pool.main.id
+
+  scope {
+    scope_name        = "read"
+    scope_description = "Read signals, clusters and events through the MCP server"
+  }
+}
+
+resource "aws_cognito_user_pool_client" "mcp" {
+  name         = "${var.name}-mcp"
+  user_pool_id = aws_cognito_user_pool.main.id
+
+  # Public client: it runs on each user's machine, where a secret can't be kept, so the login uses
+  # PKCE instead
+  generate_secret = false
+
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_scopes                 = ["openid", "email", "${aws_cognito_resource_server.mcp.identifier}/read"]
+  supported_identity_providers         = ["COGNITO"]
+
+  # The agent listens on this fixed local port for the end of the login
+  # (claude mcp add ... --callback-port 53682)
+  callback_urls = ["http://localhost:53682/callback"]
+
+  # Access tokens last an hour; the agent renews them with the refresh token, so users log in
+  # again only after 30 days
+  access_token_validity  = 1
+  id_token_validity      = 1
+  refresh_token_validity = 30
+  token_validity_units {
+    access_token  = "hours"
+    id_token      = "hours"
+    refresh_token = "days"
+  }
+}

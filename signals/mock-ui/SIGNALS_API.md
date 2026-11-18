@@ -4,13 +4,13 @@ Every page reads and writes real data from the Tripwire API. There is no fake da
 
 | Page | Real data | Still hidden |
 |---|---|---|
-| Home | Problem events by signal, top problem clusters, run cost, problem events over time, finished runs by outcome | "What visitors asked for" (needs templates) |
+| Home | Problem events by signal, top problem clusters, run cost, problem events over time, finished runs by outcome | "What visitors asked for" (not built yet: it reads a signal made from the Intent template) |
 | Signals list | Signals, event, cluster and run counts, Activity sparkline, last event, on/off | Delete |
 | Signal page → Events | Cluster strip, chart by cluster, events with severity, fields and Laminar link; severity / cluster / search filters; paging | App versions |
 | Signal page → Runs | Runs with status, attempts, model, cost, error; status / source / outcome / search filters; chart of finished runs; paging | |
 | Signal page → Settings | Edit the definition, turn on/off | Versions, Alerts, Backfill tabs |
-| New signal | Create, and **Test on a trace** (judges one stored trace, saves nothing) | Templates, sampling, span trigger, most filters |
-| Settings | Laminar and OpenAI API keys: hint, where each comes from, set (checked first) and remove (`GET/PUT/DELETE /api/settings`). The layout reads the same settings for the "not connected yet" banner and shares them with the page (`useOutletContext`) | Notifications (Slack) |
+| New signal | Create, blank or from a template (Issues, Friction, Intent), and **Test on a trace** (judges one stored trace, saves nothing) | Sampling, span trigger, most filters |
+| Settings | Laminar and OpenAI API keys: hint, where each comes from, set (checked first) and remove (`GET/PUT/DELETE /api/settings`). The layout reads the same settings for the "not connected yet" banner and shares them with the page (`useOutletContext`). Slack: connect a webhook (a connect message is posted first; saved only if Slack accepts), status and alert counts, disconnect (`GET/PUT/DELETE /api/settings/slack`, `useSlack`) | |
 
 Everything hidden is behind a flag in `src/api/features.js`. `HIDDEN_CONTROLS.md` lists each one and
 what has to exist before it comes back.
@@ -32,7 +32,8 @@ Vite sends every `/api/...` request to `localhost:8080`, so there's no CORS or A
 If the backend isn't running, pages say they can't reach the API.
 
 To see events, the backend needs traces: point it at a Laminar project with traffic (see
-`signals/backend/.env.example`). The seed (runs once on `docker compose up`) creates one signal to start with.
+`signals/backend/.env.example`). The seed (runs once on `docker compose up`) creates the project but no signals: create them on the
+New signal form, blank or from a template.
 
 ## Counting happens in the database
 
@@ -49,6 +50,8 @@ always describe the whole time range, however many events it holds.
 | `GET /api/signals/{id}/run-counts?bucket_minutes&...same filters` | finished runs per bucket: `[{ bucket, event, nothing, failed }]` |
 | `GET /api/signals/{id}/clusters?since&until` | `{ events, clustered_events, clusters: [...] }`, clusters with events in the range, most first |
 | `GET /api/overview?bucket_minutes&since&until` | everything Home shows |
+| `GET /api/clusters/{id}?examples` | one cluster over all time: counts, conversations, first and last seen, up to 20 summaries and causes, and `examples` (default 3, max 10) example events. No page uses it yet; the MCP server does (`signals/backend/MCP.md`, served at `/api/mcp`) |
+| `GET /api/templates` | the built-in signal templates, in the order the form shows them: id, name, short name, icon, description, instruction, output schema. They live in `signals/backend/tripwire/signal_templates/` (one `.md` and one `.json` each). Creating a signal with an unknown `template` is a 422 |
 
 - **Search** (`q`) is case-insensitive "contains", over field *values* (not field names), trace ID, severity
   and evidence labels for events; status, source, trace ID and error for runs. An exact ID also matches.
@@ -90,10 +93,9 @@ src/api/
   client.js     raw fetch calls to /api; throws ApiError (status 0 = API unreachable, 422 = list of problems)
   adapt.js      API responses -> the shapes the pages use, and form values / filters -> API parameters
   hooks.js      useSignals, useSignal, useEvents, useEventCounts, useRuns, useRunCounts, useClusters,
-                useOverview: { data, error, loading, reload }
+                useOverview, useSettings, useTemplates: { data, error, loading, reload }
   actions.js    createSignal, editSignal, setActive, testRun: return the saved signal in page shape
   features.js   FEATURES flags for controls with no API yet
-  templates.js  the six signal templates (hidden until FEATURES.templates)
   index.js      the only file pages import from
 ```
 

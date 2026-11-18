@@ -127,6 +127,25 @@ export function definitionToApi(values) {
   };
 }
 
+// A built-in template -> the form's template shape (its fields in the same shape as a signal's).
+export function templateFromApi(t) {
+  return {
+    id: t.id,
+    name: t.name,
+    shortName: t.short_name,
+    icon: t.icon,
+    description: t.description,
+    instruction: t.instruction,
+    payloadFields: t.output_schema.map((f) => ({
+      name: f.name,
+      type: f.type,
+      description: f.description,
+      choices: f.choices ?? [],
+      nullable: f.nullable,
+    })),
+  };
+}
+
 export const templateToApi = (templateId) =>
   templateId && templateId !== "blank" ? templateId : null;
 
@@ -198,6 +217,21 @@ export const overviewFromApi = (body) => ({
 
 // Settings: which key each provider uses. source is "saved", "environment" or "missing".
 const keyFromApi = (k) => ({ source: k.source, hint: k.hint, unreadable: k.unreadable });
+
+// Slack: connected or not, and how alerts since connecting went. Times are ISO strings.
+export const slackFromApi = (s) => ({
+  connected: s.configured,
+  hint: s.hint, // e.g. "hooks.slack.com/…a1B2": never the webhook URL
+  unreadable: s.unreadable, // saved, but the server can't decrypt it: connect again
+  connectedAt: s.enabled_at,
+  verifiedAt: s.verified_at, // when a message last proved the webhook works
+  sent: s.sent,
+  retrying: s.retrying,
+  failed: s.failed,
+  skipped: s.skipped, // repeats of a problem that already alerted
+  lastError: s.last_error,
+  lastFailedAt: s.last_failed_at,
+});
 
 export function settingsFromApi(s) {
   return {

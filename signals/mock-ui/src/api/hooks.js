@@ -10,7 +10,9 @@ import {
   runPageFromApi,
   settingsFromApi,
   signalFromApi,
+  slackFromApi,
   summaryFromApi,
+  templateFromApi,
 } from "./adapt";
 
 // Loads data when the page opens or a dependency changes. Returns { data, error, loading, reload }.
@@ -90,6 +92,13 @@ export const useOverview = (range, bucketMinutes) =>
     [range?.start, range?.end, bucketMinutes],
   );
 
+// The New signal form's template tiles.
+export const useTemplates = () =>
+  useApi(() => client.listTemplates().then((rows) => rows.map(templateFromApi)), []);
+
 // The Settings page and the "not connected yet" banner. The layout loads it once and shares it with
 // the Settings page (useOutletContext), so saving a key updates the banner too.
 export const useSettings = () => useApi(() => client.getSettings().then(settingsFromApi), []);
+
+// Settings → Slack.
+export const useSlack = () => useApi(() => client.getSlack().then(slackFromApi), []);

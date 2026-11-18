@@ -40,11 +40,11 @@ def versions(conn):
 
 
 def test_create_makes_a_signal_with_version_1(client):
-    r = create(client, template="failure")
+    r = create(client, template="issues")
     assert r.status_code == 201
     body = r.json()
     assert (body["name"], body["version_number"], body["active"], body["template"]) == \
-        ("Made-up facts", 1, True, "failure")
+        ("Made-up facts", 1, True, "issues")
     assert body["output_schema"][0] == {"name": "claim", "type": "string",
                                         "description": "The invented fact", "nullable": False}
 
@@ -180,6 +180,20 @@ def test_rename_to_a_taken_name_is_409(client):
     create(client)
     other = create(client, name="Other").json()["id"]
     assert client.put(f"/api/signals/{other}", json=VALID).status_code == 409
+
+
+def test_unknown_template_is_refused(client):
+    r = create(client, template="failure")
+    assert r.status_code == 422
+    assert r.json()["detail"] == ["unknown template: 'failure'"]
+
+
+def test_templates_list_the_three_in_order(client):
+    templates = client.get("/api/templates").json()
+    assert [t["id"] for t in templates] == ["issues", "friction", "intent"]
+    intent = templates[2]
+    assert (intent["name"], intent["short_name"]) == ("Intent Classifier", "Intent")
+    assert [f["name"] for f in intent["output_schema"]] == ["intent", "complexity"]
 
 
 def test_template_cannot_be_changed_by_an_edit(client):
@@ -517,3 +531,102 @@ def test_unknown_time_zone_is_422(client, conn):
     r = client.get(f"/api/signals/{signal['id']}/event-counts", params={"bucket_minutes": 60, "tz": "Mars/Base"})
     assert r.status_code == 422
     assert client.get("/api/overview", params={"bucket_minutes": 60, "tz": "Mars/Base"}).status_code == 422
+
+
+# ------------------------------------------------------------------ one cluster
+
+from tests.vectors import base_vector, vector_at  # noqa: E402
+
+
+def vector(values):
+    return "[" + ",".join(str(v) for v in values) + "]"
+
+
+def add_placed_cluster(conn, signal_id, placed, *, name="Cancels orders"):
+    """A leaf cluster centered on base_vector(), each (event_id, distance) member placed exactly that
+    far from the center."""
+    cluster_id = conn.execute(
+        "INSERT INTO clusters (signal_id, name, centroid) VALUES (%s, %s, %s) RETURNING id",
+        (signal_id, name, vector(base_vector()))).fetchone()[0]
+    for axis, (event_id, distance) in enumerate(placed, start=1):
+        conn.execute("INSERT INTO event_embeddings (event_id, model, embedding) VALUES (%s, 'm', %s)",
+                     (event_id, vector(vector_at(distance, axis))))
+        conn.execute("INSERT INTO cluster_members (event_id, cluster_id, distance) VALUES (%s, %s, %s)",
+                     (event_id, cluster_id, distance))
+    return cluster_id
+
+
+def turn_in_session(conn, version_id, session, **kwargs):
+    """One event on a new trace in `session`; returns the event's ID."""
+    laminar_id, _ = add_turn(conn, version_id, events=1, **kwargs)
+    conn.execute("UPDATE traces SET session_id = %s WHERE laminar_trace_id = %s", (session, laminar_id))
+    return event_ids(conn, laminar_id)[0]
+
+
+def summarize(conn, event_id, summary=None, cause=None):
+    """A done summary when `summary` is given, else a pending one."""
+    done = summary is not None
+    conn.execute("""INSERT INTO event_summaries (event_id, status, summary, cause, model, prompt_version,
+                                                 attempts, finished_at)
+                    VALUES (%s, %s, %s, %s, 'm', 1, %s, CASE WHEN %s THEN now() END)""",
+                 (event_id, "done" if done else "pending", summary, cause, int(done), done))
+
+
+def test_unknown_or_parent_cluster_is_404(client, conn):
+    signal = create(client).json()
+    parent = add_cluster(conn, signal["id"], [], name="A parent", level=1)
+    assert client.get("/api/clusters/999").status_code == 404
+    assert client.get(f"/api/clusters/{parent}").status_code == 404
+
+
+def test_cluster_counts_every_event_whatever_its_time(client, conn):
+    signal = create(client).json()
+    v = signal["version_id"]
+    placed = [(turn_in_session(conn, v, "a"), 0.1),
+              (turn_in_session(conn, v, "a", severity="info"), 0.2),
+              (turn_in_session(conn, v, None, hours_ago=24 * 30), 0.3)]     # older than any default range
+    cluster = add_placed_cluster(conn, signal["id"], placed)
+    body = client.get(f"/api/clusters/{cluster}").json()
+    assert (body["name"], body["signal_id"], body["signal_name"]) == ("Cancels orders", signal["id"], VALID["name"])
+    # Session "a" is one conversation; the trace with no session counts as its own.
+    assert (body["events"], body["problem_events"], body["conversations"]) == (3, 2, 2)
+    assert body["first_event_at"] < body["last_event_at"]
+
+
+def test_examples_are_the_most_typical_spread_over_conversations(client, conn):
+    conn.execute("UPDATE projects SET laminar_project_id = '11111111-1111-1111-1111-111111111111'")
+    signal = create(client).json()
+    v = signal["version_id"]
+    a1, a2, a3 = (turn_in_session(conn, v, "a") for _ in range(3))
+    b1 = turn_in_session(conn, v, "b")
+    c1 = turn_in_session(conn, v, "c")
+    # Session a holds the three closest members; b and c are farther out.
+    cluster = add_placed_cluster(conn, signal["id"], [(a1, 0.05), (a2, 0.06), (a3, 0.07), (b1, 0.2), (c1, 0.25)])
+    conn.execute("UPDATE signal_runs SET analysis = 'Cancelled without asking.'")
+
+    examples = client.get(f"/api/clusters/{cluster}").json()["examples"]
+    assert [e["id"] for e in examples] == [a1, b1, c1]          # one per conversation, closest first
+    assert examples[0]["analysis"] == "Cancelled without asking."
+    assert examples[0]["laminar_url"].startswith("http://laminar.test:5667/project/")
+
+    # Once every conversation has one, the next closest of the rest fill the count.
+    more = client.get(f"/api/clusters/{cluster}", params={"examples": 4}).json()["examples"]
+    assert [e["id"] for e in more] == [a1, a2, b1, c1]
+    assert client.get(f"/api/clusters/{cluster}", params={"examples": 11}).status_code == 422
+
+
+def test_summaries_are_done_ones_most_typical_first(client, conn):
+    signal = create(client).json()
+    v = signal["version_id"]
+    near, middle, far = (turn_in_session(conn, v, s) for s in ("a", "b", "c"))
+    cluster = add_placed_cluster(conn, signal["id"], [(far, 0.3), (near, 0.1), (middle, 0.2)])
+    summarize(conn, far, "Refund issued twice.", "No idempotency check.")
+    summarize(conn, near, "Order cancelled without confirmation.", "Prompt never asks to confirm.")
+    summarize(conn, middle)
+
+    body = client.get(f"/api/clusters/{cluster}").json()
+    assert [s["event_id"] for s in body["summaries"]] == [near, far]
+    assert body["summaries"][0]["cause"] == "Prompt never asks to confirm."
+    by_id = {e["id"]: e for e in body["examples"]}
+    assert by_id[near]["summary"] == "Order cancelled without confirmation."
+    assert by_id[middle]["summary"] is None

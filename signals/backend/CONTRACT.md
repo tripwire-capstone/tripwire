@@ -44,7 +44,7 @@ Rules for every service:
 - Handles the stop signal (SIGTERM): finishes or abandons the current step, then exits.
 
 **Open**
-- [ ] Notifier: separate service later, or a step in the clusterer?
+- [x] Notifier: a separate service, one copy (`tripwire.notifier`; on AWS in `infra/stack/tripwire.tf`). Decided Nov 18.
 
 ---
 
@@ -201,8 +201,8 @@ Real traffic goes through the real poller; the runner and clusterer are placehol
 write **real rows in the final shape**, so swapping in real logic changes nothing downstream.
 
 - **Poller (real):** the prototype's sync, adapted. One row per finished Laminar trace.
-- **Seed:** one project, one signal ("User frustration") with v1, one cluster ("Placeholder
-  cluster").
+- **Seed:** one project, no signals (they're created in the UI, blank or from a template in
+  `tripwire/signal_templates/`).
 - **Runner (placeholder):** for each trace with no run for an active signal's current version,
   a `done` run; for about `STUB_EVENT_RATE` of traces (hash of the trace ID), also an event with
   a canned description. No fan-out, claiming or leases yet: it finds unjudged traces with a query

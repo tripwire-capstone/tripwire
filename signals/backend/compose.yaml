@@ -3,12 +3,15 @@
 #   db         Postgres + pgvector. On its FIRST start (empty volume) it runs
 #              everything in migrations/ in name order. To apply a changed or new
 #              migration: docker compose down -v (deletes the data), then up again.
-#   seed       one project, one signal (+ v1), one cluster; runs once, then exits
+#   seed       one project (no signals: create them in the UI); runs once, then exits
 #   poller     Laminar -> traces, every 10 s
 #   runner     PLACEHOLDER: traces -> runs + some events, every 5 s
 #   clusterer  events -> summaries -> vectors -> clusters every 10 s (OpenAI key saved on the Settings
 #              page, else OPENAI_API_KEY in .env; CLUSTERER_MODE=placeholder runs without OpenAI).
 #              Has a healthcheck: `docker compose ps`.
+#   api        the HTTP API the UI reads, on http://localhost:8080, with the MCP server for coding
+#              agents inside it at http://localhost:8080/api/mcp (MCP.md). MCP's auth is off unless
+#              the MCP_COGNITO_* settings are in .env.
 #
 # dev view: is data flowing? Once the UI runs, open http://localhost:5174/dev.
 
@@ -78,13 +81,20 @@ services:
       retries: 3
       start_period: 60s
 
+  notifier:
+    <<: *backend
+    command: python -m tripwire.notifier
+    profiles: ["notifications"]
+    restart: on-failure
+
   api:
     <<: *backend
-    command: uvicorn tripwire.api.app:app --host 0.0.0.0 --port 8080
+    command: uvicorn tripwire.api.asgi:app --host 0.0.0.0 --port 8080
     ports:
       - "8080:8080"
     # Settings checks keys against Laminar, and test-run reads traces from it: same as the poller.
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
 volumes:
   pgdata:
