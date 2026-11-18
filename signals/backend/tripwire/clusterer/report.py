@@ -1,6 +1,7 @@
 """Calibration report: how well the clusters match an answer key (DESIGN.md Q14, grouping PR 6).
 
     python -m tripwire.clusterer.report --database-url URL --answer-key runs/<run>/answer_key.jsonl [--sweep]
+        [--labels turn|sofar] [--as-version N --summaries-out FILE]
 
 A developer tool, never run by the deployed product. It only reads the database (the sweep writes
 to a throwaway schema, see sweep.py). `--database-url` must be given on the command line; the
@@ -11,6 +12,14 @@ Laminar trace ID and the bugs that fired in that turn, so each event gets the bu
 turn: event -> its trace -> that turn's bugs (decided Nov 12, Decision 1). A bug is recorded on
 the turn where it fires, even when its effect shows in a later turn; events whose turn had no bug
 are left out of the scores and listed separately rather than guessed.
+
+`--labels sofar` (Nov 17) labels each event with every bug fired so far in its conversation, plus
+"decoy" for every turn of a decoy conversation (frustrated on purpose, nothing broken: no bug ever
+fires there, so per-turn labels can't see it). Use it for Signals that react a turn later, like
+frustration: per-turn labels left 141 of 180 frustration events unscored on run park-causes-1b.
+
+`--as-version N` (with --sweep) re-summarizes the same events under prompt vN in a throwaway
+schema and replays the sweep there (resummarize.py): same events, same arrival order, new wording.
 
 Scores (decided Nov 12, Decision 3; research and a test of both in the work log):
   * Extended BCubed precision and recall (Amigó et al. 2009) are the main scores. Each event is
@@ -27,6 +36,7 @@ Scores are per Signal (clusters belong to a Signal, Q6) and per summarizer promp
 
 import argparse
 import json
+import os
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,8 +85,17 @@ class Scores:
 
 # ------------------------------------------------------------------ answer key
 
-def load_answer_key(paths):
-    """{laminar_trace_id: frozenset of bugs fired in that turn} from park-traffic answer keys."""
+LABEL_MODES = ("turn", "sofar")
+
+
+def load_answer_key(paths, labels="turn"):
+    """{laminar_trace_id: frozenset of labels} from park-traffic answer keys.
+
+    labels="turn": the bugs fired in that turn. labels="sofar": the bugs fired in that turn or an
+    earlier one of the same conversation, plus "decoy" on every turn of a decoy conversation.
+    """
+    if labels not in LABEL_MODES:
+        raise ValueError(f"labels must be one of {LABEL_MODES}, got {labels!r}")
     bugs_by_trace = {}
     for path in paths:
         for line_number, line in enumerate(Path(path).read_text().splitlines(), start=1):
@@ -88,9 +107,11 @@ def load_answer_key(paths):
                     f"{path} line {line_number} has no bugs_by_turn: it was made by an older park-traffic. "
                     "Rerun the traffic with a park-traffic that records bugs per turn."
                 )
-            for turn in conversation["bugs_by_turn"]:
+            so_far = {"decoy"} if labels == "sofar" and conversation.get("target_bug") == "decoy" else set()
+            for turn in conversation["bugs_by_turn"]:            # in turn order, as park-traffic writes it
+                so_far |= set(turn["bugs"])
                 if turn["trace_id"] is not None:          # None: a dry run, nothing was sent
-                    bugs_by_trace[turn["trace_id"]] = frozenset(turn["bugs"])
+                    bugs_by_trace[turn["trace_id"]] = frozenset(turn["bugs"] if labels == "turn" else so_far)
     return bugs_by_trace
 
 
@@ -323,8 +344,9 @@ def render_sweep(group_events, results):
     return "\n".join(lines)
 
 
-def build_report(conn, bugs_by_trace, sweep_results=None):
-    """The whole report as text. `sweep_results`: [(threshold, {event_id: cluster_id or None})]."""
+def build_report(conn, bugs_by_trace, sweep_results=None, current=True):
+    """The whole report as text. `sweep_results`: [(threshold, {event_id: cluster_id or None})].
+    `current=False` (an --as-version schema, where nothing is clustered yet): only the sweep."""
     events = load_events(conn, bugs_by_trace)
     sections = [render_funnel(load_funnel(conn, bugs_by_trace))]
     if not events:
@@ -335,10 +357,11 @@ def build_report(conn, bugs_by_trace, sweep_results=None):
     for (signal_id, prompt_version), group_events in by_group(events).items():
         unlabeled = sum(1 for event in group_events if not event.bugs)
         lines = [f"Signal {signal_id}, summarizer prompt v{prompt_version}: {len(group_events)} events "
-                 f"({unlabeled} with no bug in their turn, left out of the scores)",
-                 scores_line("now", group_events),
-                 render_bug_table(group_events, names),
-                 render_nearest(group_events, nearest)]
+                 f"({unlabeled} with no label, left out of the scores)"]
+        if current:
+            lines += [scores_line("now", group_events),
+                      render_bug_table(group_events, names),
+                      render_nearest(group_events, nearest)]
         if sweep_results:
             lines.append(render_sweep(group_events, sweep_results))
         sections.append("\n".join(lines))
@@ -355,9 +378,83 @@ def parse_thresholds(text):
     return thresholds
 
 
+SUMMARIES_SQL = """
+SELECT summary.event_id, signal.name, summary.cause, summary.summary
+FROM {schema}.event_summaries summary
+JOIN {schema}.signal_events sig_event ON sig_event.id = summary.event_id
+JOIN {schema}.signal_versions version ON version.id = sig_event.signal_version_id
+JOIN {schema}.signals signal ON signal.id = version.signal_id
+WHERE summary.event_id = ANY(%s)
+"""
+
+
+def write_summaries(conn, path, event_ids, source_schema, version_schema, bugs_by_event):
+    """CSV: per event, its label, the summary we had and the --as-version one, to read side by side."""
+    import csv
+    from psycopg import sql
+
+    def read(schema):
+        query = sql.SQL(SUMMARIES_SQL).format(schema=sql.Identifier(schema))
+        return {row[0]: row[1:] for row in conn.execute(query, (list(event_ids),))}
+    before, after = read(source_schema), read(version_schema)
+    with open(path, "w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["event_id", "signal", "label", "cause_before", "summary_before", "cause_after",
+                         "summary_after"])
+        for event_id in sorted(event_ids):
+            signal, cause_before, summary_before = before.get(event_id, ("", "", ""))
+            _, cause_after, summary_after = after.get(event_id, ("", "", ""))
+            writer.writerow([event_id, signal, bug_name(bugs_by_event[event_id]), cause_before,
+                             summary_before, cause_after, summary_after])
+
+
+def run_as_version(conn, args, bugs_by_trace):
+    """--as-version: build the re-summarized schema, sweep it, report, drop it."""
+    import os
+
+    from dotenv import load_dotenv
+
+    from . import resummarize, sweep
+    from .embed import OpenAIEmbedder
+    from .llm_client import OpenAIClient
+    from .summarize import load_prompt
+
+    load_dotenv()
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise SystemExit("--as-version needs OPENAI_API_KEY (it re-summarizes and re-embeds every event)")
+    prompt = load_prompt(args.as_version)
+    events = load_events(conn, bugs_by_trace)
+    source_schema = conn.execute("SELECT current_schema()").fetchone()[0]
+    resummarize.drop_leftover_schemas(conn)
+    print(f"Re-summarizing {len(events)} events under prompt v{args.as_version} with {args.model} "
+          f"({args.workers} at a time) ...", flush=True)
+    schema, updates = resummarize.build_version_schema(
+        conn, [event.event_id for event in events], OpenAIClient(api_key), OpenAIEmbedder(api_key),
+        args.model, prompt, workers=args.workers)
+    try:
+        not_done = sum(1 for update in updates.values() if update.status != "done")
+        if not_done:
+            print(f"{not_done} events got no v{args.as_version} summary and are left out of the replay.")
+        results = sweep.sweep(conn, args.thresholds, source_schema=schema)
+        original_path = conn.execute("SHOW search_path").fetchone()[0]
+        conn.execute(f"SET search_path TO {schema}, public")
+        try:
+            print(build_report(conn, bugs_by_trace, results, current=False))
+        finally:
+            conn.execute("SELECT set_config('search_path', %s, false)", (original_path,))
+        if args.summaries_out:
+            write_summaries(conn, args.summaries_out, [event.event_id for event in events], source_schema,
+                            schema, {event.event_id: event.bugs for event in events})
+            print(f"\nSummaries before/after: {args.summaries_out}")
+    finally:
+        resummarize.drop_schema(conn, schema)
+
+
 def main(argv=None):
     from . import sweep
     from .loop import open_connection
+    from .settings import DEFAULTS
 
     parser = argparse.ArgumentParser(description="Score clusters against a park-traffic answer key.")
     parser.add_argument("--database-url", required=True,
@@ -368,13 +465,30 @@ def main(argv=None):
                         help="also replay the clusterer at other thresholds, in a throwaway schema")
     parser.add_argument("--thresholds", type=parse_thresholds, default=sweep.default_thresholds(),
                         help="comma-separated thresholds for --sweep (default 0.20 to 0.40 by 0.02)")
+    parser.add_argument("--labels", choices=LABEL_MODES, default="turn",
+                        help="turn: bugs fired in the event's turn (default); sofar: bugs so far in its "
+                             "conversation, plus decoy conversations")
+    parser.add_argument("--as-version", type=int,
+                        help="with --sweep: re-summarize the same events under this prompt version "
+                             "(paid calls) and sweep that instead")
+    parser.add_argument("--model", default=os.environ.get("SUMMARIZER_MODEL", DEFAULTS["SUMMARIZER_MODEL"][0]),
+                        help="summarizer model for --as-version")
+    parser.add_argument("--workers", type=int, default=8, help="summarizer calls in flight for --as-version")
+    parser.add_argument("--summaries-out", help="with --as-version: CSV of each event's summary before and after")
     args = parser.parse_args(argv)
+    if args.as_version is not None and not args.sweep:
+        parser.error("--as-version needs --sweep")
+    if args.summaries_out and args.as_version is None:
+        parser.error("--summaries-out needs --as-version")
 
     try:
-        bugs_by_trace = load_answer_key(args.answer_key)
+        bugs_by_trace = load_answer_key(args.answer_key, args.labels)
     except (AnswerKeyError, OSError, json.JSONDecodeError) as error:
         parser.error(str(error))
     with open_connection(args.database_url) as conn:
+        if args.as_version is not None:
+            run_as_version(conn, args, bugs_by_trace)
+            return
         sweep_results = sweep.sweep(conn, args.thresholds) if args.sweep else None
         print(build_report(conn, bugs_by_trace, sweep_results))
 

@@ -26,7 +26,7 @@ def test_load_settings_uses_design_defaults_when_nothing_is_set():
     assert settings.mode == "real"
     assert settings.interval_seconds == 10
     assert settings.prepare_batch == 50
-    assert settings.assign_threshold == 0.18
+    assert settings.assign_threshold == 0.24
     assert settings.min_events == 3
     assert settings.min_conversations == 2
     assert settings.pool_window_days == 14
@@ -94,9 +94,9 @@ def test_env_example_lists_every_clusterer_setting_with_the_same_default():
         assert kind(documented[name]) == default, f"{name}: .env.example says {documented[name]}, code says {default}"
 
 
-def test_summarizer_defaults_to_gpt_6_luna_and_prompt_version_4():
+def test_summarizer_defaults_to_gpt_6_luna_and_prompt_version_5():
     settings = load_settings(BASE)
-    assert (settings.summarizer_model, settings.summarizer_prompt_version) == ("gpt-6-luna", 4)
+    assert (settings.summarizer_model, settings.summarizer_prompt_version) == ("gpt-6-luna", 5)
 
 
 def test_load_settings_rejects_a_prompt_version_with_no_prompt_files():

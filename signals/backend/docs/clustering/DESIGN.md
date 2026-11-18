@@ -115,14 +115,14 @@ responses.
 | `OPENAI_API_KEY` | none | Summarizer + embedder + naming, when no key is saved on the Settings page. Not a startup setting: looked up every pass; with no key the OpenAI steps wait and health says "waiting for an OpenAI key" (not unhealthy) |
 | `CLUSTERER_INTERVAL_SECONDS` | 10 | Q13 |
 | `CLUSTER_PREPARE_BATCH` | 50 | Q13 |
-| `CLUSTER_ASSIGN_THRESHOLD` | 0.18 (calibrated Nov 17 on park run park-causes-1b; was 0.30) | Q7, Q14 |
+| `CLUSTER_ASSIGN_THRESHOLD` | 0.24 (calibrated Nov 17 on park run park-causes-1b with summarizer v5; was 0.30, 0.18 with v4) | Q7, Q14 |
 | `CLUSTER_MIN_EVENTS` | 3 | Q8 |
 | `CLUSTER_MIN_CONVERSATIONS` | 2 | Q8 |
 | `CLUSTER_POOL_WINDOW_DAYS` | 14 | Q9 |
 | `CLUSTER_HEALTH_STALL_MINUTES` | 15 | Q12 |
 | `CLUSTER_HEALTH_FAILURE_RUN` | 10 | Q12 |
 | `SUMMARIZER_MODEL` | `gpt-6-luna` | Q3, Q4; summarizer below |
-| `SUMMARIZER_PROMPT_VERSION` | 4 (needs `prompts/summarize_v4.md` + `.schema.json`; v4 adds `details`) | summarizer below |
+| `SUMMARIZER_PROMPT_VERSION` | 5 (needs `prompts/summarize_v5.md` + `.schema.json`; v4 added `details`; v5 leads with the cause, not the reaction, and drops the area suffix) | summarizer below |
 | `CLUSTER_HEALTH_ALIVE_MINUTES` | 3 | Q12 (`--alive`) |
 | `CLUSTERER_LAST_PASS_FILE` | `/tmp/clusterer-last-pass` | Q12 (`--alive`) |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` (1536 dims, one model only) | existing |

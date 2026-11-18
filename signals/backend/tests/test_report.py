@@ -59,6 +59,33 @@ def test_load_answer_key_maps_each_turns_trace_to_its_bugs(tmp_path):
     assert load_answer_key([path]) == {"trace-a": frozenset(), "trace-b": frozenset({"forgetting", "large_party"})}
 
 
+def test_load_answer_key_sofar_carries_bugs_forward_within_a_conversation(tmp_path):
+    path = write_answer_key(tmp_path, [
+        {"target_bug": "large_party", "bugs_by_turn": [
+            {"turn": 1, "trace_id": "a1", "bugs": []},
+            {"turn": 2, "trace_id": "a2", "bugs": ["large_party"]},
+            {"turn": 3, "trace_id": "a3", "bugs": []}]},              # the user reacts a turn later
+        {"target_bug": "timeout", "bugs_by_turn": [
+            {"turn": 1, "trace_id": "b1", "bugs": ["timeout"]}]}])  # another conversation: nothing carried over
+    assert load_answer_key([path], labels="sofar") == {
+        "a1": frozenset(), "a2": frozenset({"large_party"}), "a3": frozenset({"large_party"}),
+        "b1": frozenset({"timeout"})}
+
+
+def test_load_answer_key_sofar_labels_every_turn_of_a_decoy_conversation(tmp_path):
+    path = write_answer_key(tmp_path, [{"target_bug": "decoy", "bugs_by_turn": [
+        {"turn": 1, "trace_id": "d1", "bugs": []}, {"turn": 2, "trace_id": "d2", "bugs": []}]}])
+    assert load_answer_key([path], labels="sofar") == {"d1": frozenset({"decoy"}), "d2": frozenset({"decoy"})}
+    # Per-turn labels are unchanged: no bug fires in a decoy conversation, so no label.
+    assert load_answer_key([path]) == {"d1": frozenset(), "d2": frozenset()}
+
+
+def test_load_answer_key_rejects_an_unknown_label_mode(tmp_path):
+    path = write_answer_key(tmp_path, [{"bugs_by_turn": []}])
+    with pytest.raises(ValueError, match="labels must be one of"):
+        load_answer_key([path], labels="per-conversation")
+
+
 def test_load_answer_key_combines_several_runs(tmp_path):
     first = write_answer_key(tmp_path, [{"bugs_by_turn": [{"turn": 1, "trace_id": "trace-a", "bugs": ["timeout"]}]}], "one.jsonl")
     second = write_answer_key(tmp_path, [{"bugs_by_turn": [{"turn": 1, "trace_id": "trace-b", "bugs": []}]}], "two.jsonl")
