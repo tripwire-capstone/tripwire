@@ -12,6 +12,9 @@ export {
   useClusters,
   useOverview,
   useSettings,
+  useSlack,
 } from "./hooks";
-export { createSignal, editSignal, setActive, testRun, saveKey, clearKey } from "./actions";
+export {
+  createSignal, editSignal, setActive, testRun, saveKey, clearKey, connectSlack, disconnectSlack,
+} from "./actions";
 export { useDevStatus } from "./dev"; // dev view

@@ -6,7 +6,7 @@
 
 - **Local development is unchanged.** `docker compose up --build` in `signals/backend`, UI with `npm run dev` on `:5174`, API on `:8080` at `/api/...`, same `.env`. No database reset needed.
 - **On AWS**, Tripwire lives under Laminar's address: `https://<laminar-host>/tripwire/`. Laminar's own "Signals" sidebar item leads there.
-- **One image** (backend code + built UI) runs as **four ECS services**: poller, runner, clusterer, and the API, which also serves the UI.
+- **One image** (backend code + built UI) runs as **five ECS services**: poller, runner, clusterer, notifier (Slack alerts), and the API, which also serves the UI.
 - Tripwire's data is in its **own `tripwire` database on Laminar's RDS instance**. A one-off **migration task** prepares it on every deploy.
 - **Three habits** keep code working on AWS: see [Rules](#rules).
 
@@ -17,7 +17,7 @@ Browser ──► load balancer (Cognito login)
               ├─ /tripwire/*            ──► Tripwire API container (UI + /api)
               ├─ /project/*/signals*    ──► redirect to /tripwire/signals
               └─ everything else        ──► Laminar
-Tripwire's poller / runner / clusterer ──► Laminar's API inside the VPC, RDS (tripwire database), OpenAI
+Tripwire's poller / runner / clusterer / notifier ──► Laminar's API inside the VPC, RDS (tripwire database), OpenAI
 ```
 
 - **Path prefix.** The load balancer sends everything under `/tripwire/` to the API container. `tripwire/api/serve.py` strips the prefix, so `app.py` still sees `/api/...`. Every other path under `/tripwire/` gets the UI (the router handles it in the browser).
@@ -44,7 +44,7 @@ Tripwire's poller / runner / clusterer ──► Laminar's API inside the VPC, R
 2. **Starting Laminar.**
 3. **Starting Tripwire**:
    - **Database:** the migration task runs once and must succeed.
-   - **Then the services:** a second, quiet apply moves them to the new image, and the CLI waits for **Dashboard** (the API) and **Backend** (poller, runner, clusterer) to run.
+   - **Then the services:** a second, quiet apply moves them to the new image, and the CLI waits for **Dashboard** (the API) and **Backend** (poller, runner, clusterer, notifier) to run.
 4. Deletes the two keys older deploys stored in SSM, if they're still there (once).
 5. Shows both URLs, then **Connect Tripwire**: sign in to Laminar, create a project API key, and add it and an OpenAI key in Tripwire → Settings. Until then Tripwire shows "Not connected yet" and the workers wait (no crash, no alarm).
 

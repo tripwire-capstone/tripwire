@@ -1,4 +1,4 @@
-# Tripwire: the Signals backend (poller, runner, clusterer, API + UI), next to Laminar.
+# Tripwire: the Signals backend (poller, runner, clusterer, notifier, API + UI), next to Laminar.
 # Reasoning: infra/docs/BACKEND_INFRA_NOTES.md (requirements) and TRIPWIRE_ON_AWS_RULES.md.
 #
 #   - One image, four services with different start commands.
@@ -16,6 +16,7 @@ locals {
   tripwire_common_env = {
     PGSSLMODE           = "require" # RDS Postgres 16 only accepts SSL connections
     JUDGE_DEFAULT_MODEL = var.judge_default_model
+    TRIPWIRE_UI_URL     = local.tripwire_url # where links in Slack messages point
   }
 
   # What each service needs, beyond the common env: start command, secrets, deploy limits
@@ -40,6 +41,14 @@ locals {
       secrets = ["database_url", "secret_key"]
       env     = {}
       # Exactly one copy: two clusterers would make clusters twice (CONTRACT.md)
+      maximum_percent         = 100
+      minimum_healthy_percent = 0
+    }
+    notifier = {
+      command = ["python", "-m", "tripwire.notifier"]
+      secrets = ["database_url", "secret_key"]
+      env     = {}
+      # Exactly one copy: two notifiers could send the same Slack alert twice
       maximum_percent         = 100
       minimum_healthy_percent = 0
     }

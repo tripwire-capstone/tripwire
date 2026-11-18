@@ -889,7 +889,10 @@ def test_run(body: TestRunIn, conn=Depends(get_conn), judge_fn=Depends(get_judge
         cached_input_tokens=u.cached_input_tokens, output_tokens=u.output_tokens, cost_usd=u.cost_usd)
 
 
-# Settings page: Laminar and OpenAI keys (settings.py).
+# Settings page: Slack (slack_settings.py) before the keys' /{kind} routes (settings.py), so
+# /api/settings/slack isn't read as a key kind.
+from .slack_settings import router as slack_settings_router  # noqa: E402
+app.include_router(slack_settings_router)
 from .settings import router as settings_router  # noqa: E402
 app.include_router(settings_router)
 

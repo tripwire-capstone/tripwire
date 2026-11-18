@@ -10,6 +10,7 @@ import {
   runPageFromApi,
   settingsFromApi,
   signalFromApi,
+  slackFromApi,
   summaryFromApi,
 } from "./adapt";
 
@@ -93,3 +94,6 @@ export const useOverview = (range, bucketMinutes) =>
 // The Settings page and the "not connected yet" banner. The layout loads it once and shares it with
 // the Settings page (useOutletContext), so saving a key updates the banner too.
 export const useSettings = () => useApi(() => client.getSettings().then(settingsFromApi), []);
+
+// Settings → Slack.
+export const useSlack = () => useApi(() => client.getSlack().then(slackFromApi), []);

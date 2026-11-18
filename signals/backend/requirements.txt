@@ -1,6 +1,7 @@
 # Pinned so everyone (and the AWS image build) installs exactly the same versions.
 cryptography==50.0.2  # encrypts API keys saved on the Settings page (tripwire/crypto.py)
 httpx==0.28.1
+cryptography==50.0.2
 numpy==2.5.4        # needed by scipy; the clusterer's vectors
 openai==3.49.0       # summarizer calls (clusterer, prepare half)
 psycopg[binary]==3.3.8

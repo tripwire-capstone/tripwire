@@ -81,6 +81,12 @@ services:
       retries: 3
       start_period: 60s
 
+  notifier:
+    <<: *backend
+    command: python -m tripwire.notifier
+    profiles: ["notifications"]
+    restart: on-failure
+
   api:
     <<: *backend
     command: uvicorn tripwire.api.asgi:app --host 0.0.0.0 --port 8080
