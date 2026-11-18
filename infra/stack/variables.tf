@@ -198,12 +198,14 @@ variable "tripwire_task_sizes" {
     poller    = object({ cpu = number, memory = number })
     runner    = object({ cpu = number, memory = number })
     clusterer = object({ cpu = number, memory = number })
+    notifier  = object({ cpu = number, memory = number })
     api       = object({ cpu = number, memory = number })
   })
   default = {
     poller    = { cpu = 256, memory = 512 }
     runner    = { cpu = 256, memory = 1024 }
     clusterer = { cpu = 512, memory = 1024 }
+    notifier  = { cpu = 256, memory = 512 }
     api       = { cpu = 256, memory = 512 }
   }
 }

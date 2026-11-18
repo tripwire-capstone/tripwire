@@ -44,12 +44,13 @@ export const LAMINAR: ServiceSet = {
 // infra/stack/tripwire.tf names them tripwire-<key>
 export const TRIPWIRE: ServiceSet = {
   product: "Tripwire",
-  services: ["tripwire-api", "tripwire-poller", "tripwire-runner", "tripwire-clusterer"],
+  services: ["tripwire-api", "tripwire-poller", "tripwire-runner", "tripwire-clusterer", "tripwire-notifier"],
   names: {
     "tripwire-api": "Dashboard and API",
     "tripwire-poller": "Poller",
     "tripwire-runner": "Runner",
     "tripwire-clusterer": "Clusterer",
+    "tripwire-notifier": "Notifier",
   },
   logGroup: `/ecs/${DEPLOYMENT_NAME}/tripwire`,
 };
@@ -126,7 +127,7 @@ export async function servicePhases(
       const targets = JSON.parse(out) as [string, string][];
       healthPerGroup.push(targets.filter(([id]) => !ip || id === ip).map(([, state]) => state));
     }
-    // A worker behind no load balancer (Tripwire's poller, runner, clusterer) is up once it runs
+    // A worker behind no load balancer (Tripwire's poller, runner, clusterer, notifier) is up once it runs
     const noLoadBalancer = (targetGroups[service] ?? []).length === 0;
     phases[service] = noLoadBalancer && newest?.lastStatus === "RUNNING" ? "healthy" : phaseFor(newest, healthPerGroup);
   }

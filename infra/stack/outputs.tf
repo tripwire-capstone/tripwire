@@ -80,6 +80,6 @@ output "app_security_group_id" {
 }
 
 output "tripwire_logs_command" {
-  description = "Follow all Tripwire containers' logs (migrate, poller, runner, clusterer, api)."
+  description = "Follow all Tripwire containers' logs (migrate, poller, runner, clusterer, notifier, api)."
   value       = "aws logs tail ${aws_cloudwatch_log_group.tripwire.name} --follow"
 }
