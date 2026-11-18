@@ -10,7 +10,7 @@ Every page reads and writes real data from the Tripwire API. There is no fake da
 | Signal page → Runs | Runs with status, attempts, model, cost, error; status / source / outcome / search filters; chart of finished runs; paging | |
 | Signal page → Settings | Edit the definition, turn on/off | Versions, Alerts, Backfill tabs |
 | New signal | Create, blank or from a template (Issues, Friction, Intent), and **Test on a trace** (judges one stored trace, saves nothing) | Sampling, span trigger, most filters |
-| Settings | Laminar and OpenAI API keys: hint, where each comes from, set (checked first) and remove (`GET/PUT/DELETE /api/settings`). The layout reads the same settings for the "not connected yet" banner and shares them with the page (`useOutletContext`) | Notifications (Slack) |
+| Settings | Laminar and OpenAI API keys: hint, where each comes from, set (checked first) and remove (`GET/PUT/DELETE /api/settings`). The layout reads the same settings for the "not connected yet" banner and shares them with the page (`useOutletContext`). Slack: connect a webhook (a connect message is posted first; saved only if Slack accepts), status and alert counts, disconnect (`GET/PUT/DELETE /api/settings/slack`, `useSlack`) | |
 
 Everything hidden is behind a flag in `src/api/features.js`. `HIDDEN_CONTROLS.md` lists each one and
 what has to exist before it comes back.
@@ -50,6 +50,7 @@ always describe the whole time range, however many events it holds.
 | `GET /api/signals/{id}/run-counts?bucket_minutes&...same filters` | finished runs per bucket: `[{ bucket, event, nothing, failed }]` |
 | `GET /api/signals/{id}/clusters?since&until` | `{ events, clustered_events, clusters: [...] }`, clusters with events in the range, most first |
 | `GET /api/overview?bucket_minutes&since&until` | everything Home shows |
+| `GET /api/clusters/{id}?examples` | one cluster over all time: counts, conversations, first and last seen, up to 20 summaries and causes, and `examples` (default 3, max 10) example events. No page uses it yet; the MCP server does (`signals/backend/MCP.md`, served at `/api/mcp`) |
 | `GET /api/templates` | the built-in signal templates, in the order the form shows them: id, name, short name, icon, description, instruction, output schema. They live in `signals/backend/tripwire/signal_templates/` (one `.md` and one `.json` each). Creating a signal with an unknown `template` is a 422 |
 
 - **Search** (`q`) is case-insensitive "contains", over field *values* (not field names), trace ID, severity

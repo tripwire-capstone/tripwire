@@ -44,7 +44,7 @@ Rules for every service:
 - Handles the stop signal (SIGTERM): finishes or abandons the current step, then exits.
 
 **Open**
-- [ ] Notifier: separate service later, or a step in the clusterer?
+- [x] Notifier: a separate service, one copy (`tripwire.notifier`; on AWS in `infra/stack/tripwire.tf`). Decided Nov 18.
 
 ---
 

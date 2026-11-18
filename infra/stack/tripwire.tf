@@ -1,4 +1,4 @@
-# Tripwire: the Signals backend (poller, runner, clusterer, API + UI), next to Laminar.
+# Tripwire: the Signals backend (poller, runner, clusterer, notifier, API + UI), next to Laminar.
 # Reasoning: infra/docs/BACKEND_INFRA_NOTES.md (requirements) and TRIPWIRE_ON_AWS_RULES.md.
 #
 #   - One image, four services with different start commands.
@@ -16,6 +16,7 @@ locals {
   tripwire_common_env = {
     PGSSLMODE           = "require" # RDS Postgres 16 only accepts SSL connections
     JUDGE_DEFAULT_MODEL = var.judge_default_model
+    TRIPWIRE_UI_URL     = local.tripwire_url # where links in Slack messages point
   }
 
   # What each service needs, beyond the common env: start command, secrets, deploy limits
@@ -43,11 +44,25 @@ locals {
       maximum_percent         = 100
       minimum_healthy_percent = 0
     }
+    notifier = {
+      command = ["python", "-m", "tripwire.notifier"]
+      secrets = ["database_url", "secret_key"]
+      env     = {}
+      # Exactly one copy: two notifiers could send the same Slack alert twice
+      maximum_percent         = 100
+      minimum_healthy_percent = 0
+    }
     api = {
       command = ["uvicorn", "tripwire.api.serve:app", "--host", "0.0.0.0", "--port", "8080"]
       secrets = ["database_url", "secret_key"]
       env = {
         TRIPWIRE_BASE_PATH = "/tripwire"
+        # The MCP server inside the API (/tripwire/api/mcp): coding agents log in with the same
+        # Cognito pool, through the MCP app client (cognito.tf). Without these it isn't served.
+        MCP_PUBLIC_URL           = "${local.tripwire_url}api/mcp"
+        MCP_COGNITO_REGION       = var.region
+        MCP_COGNITO_USER_POOL_ID = aws_cognito_user_pool.main.id
+        MCP_COGNITO_CLIENT_ID    = aws_cognito_user_pool_client.mcp.id
       }
       maximum_percent         = 200
       minimum_healthy_percent = 100
@@ -284,6 +299,32 @@ resource "aws_lb_listener_rule" "tripwire" {
   condition {
     path_pattern {
       values = ["/tripwire", "/tripwire/*"]
+    }
+  }
+}
+
+# MCP: coding agents can't get past the browser login above, so their two paths skip it and reach
+# the API container directly. The MCP server checks each request's Cognito access token itself;
+# the second path is the document that tells agents which login to use (it lives at the host's
+# root, outside /tripwire).
+resource "aws_lb_listener_rule" "tripwire_mcp" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 23 # before the Signals redirect (24) and Tripwire's Cognito rule (25)
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.tripwire.arn
+  }
+
+  condition {
+    host_header {
+      values = [local.laminar_domain]
+    }
+  }
+
+  condition {
+    path_pattern {
+      values = ["/tripwire/api/mcp", "/.well-known/oauth-protected-resource/tripwire/api/mcp"]
     }
   }
 }

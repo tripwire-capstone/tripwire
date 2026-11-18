@@ -80,3 +80,12 @@ def test_clusterer_starts_working_once_a_key_is_saved(conn, keys_env, monkeypatc
     assert openai.for_pass(conn)[0] is skip_prepare
     save_key(conn, project(conn), "openai", "sk-saved-key-2222222")
     assert openai.for_pass(conn)[0] == openai.preparer.prepare_events
+
+
+def test_clusterer_builds_its_preparer_with_the_summary_threads_setting(conn, keys_env):
+    default = steps()
+    default.for_pass(conn)
+    assert default.preparer.threads == 4
+    three = steps(CLUSTERER_SUMMARY_THREADS="3")
+    three.for_pass(conn)
+    assert three.preparer.threads == 3

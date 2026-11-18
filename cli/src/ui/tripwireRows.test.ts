@@ -35,17 +35,29 @@ test("tripwireRows shows Backend at its slowest worker's phase", () => {
     "tripwire-poller": { doneAt: 55_000, failed: false, retried: false },
     "tripwire-runner": running("checking health"),
     "tripwire-clusterer": running("starting"),
+    "tripwire-notifier": { doneAt: 58_000, failed: false, retried: false },
   }, 60_000);
   assert.deepEqual(rows[2], { name: "Backend", status: "running", seconds: 10, detail: "starting" });
 });
 
-test("tripwireRows marks Backend done when all three workers are, at the last one's time", () => {
+test("tripwireRows marks Backend done when all its workers are, at the last one's time", () => {
   const rows = tripwireRows(servicesStarting, {
     "tripwire-poller": { doneAt: 55_000, failed: false, retried: false },
     "tripwire-runner": { doneAt: 70_000, failed: false, retried: false },
     "tripwire-clusterer": { doneAt: 62_000, failed: false, retried: false },
+    "tripwire-notifier": { doneAt: 58_000, failed: false, retried: false },
   }, 80_000);
   assert.deepEqual(rows[2], { name: "Backend", status: "done", seconds: 20 });
+});
+
+test("tripwireRows waits for the notifier too", () => {
+  const rows = tripwireRows(servicesStarting, {
+    "tripwire-poller": { doneAt: 55_000, failed: false, retried: false },
+    "tripwire-runner": { doneAt: 70_000, failed: false, retried: false },
+    "tripwire-clusterer": { doneAt: 62_000, failed: false, retried: false },
+    "tripwire-notifier": running("checking health"),
+  }, 80_000);
+  assert.deepEqual(rows[2], { name: "Backend", status: "running", seconds: 30, detail: "checking health" });
 });
 
 test("tripwireRows names the worker that failed under Backend", () => {
@@ -53,6 +65,7 @@ test("tripwireRows names the worker that failed under Backend", () => {
     "tripwire-poller": running("starting"),
     "tripwire-runner": running("starting"),
     "tripwire-clusterer": { phase: "restarting", failed: true, retried: true },
+    "tripwire-notifier": running("starting"),
   }, 90_000);
   assert.deepEqual(rows[2], { name: "Backend", status: "failed", seconds: 40, detail: "Clusterer failed" });
 });
