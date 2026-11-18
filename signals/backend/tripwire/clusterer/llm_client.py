@@ -25,8 +25,11 @@ from ..llm import LLMBadOutput, LLMInputTooLong, LLMRefused, LLMServiceError, LL
 # Prices per 1M tokens, for cost_usd. A model not listed gets cost None ("not priced"), never 0.
 # gpt-6-luna: $0.10 input, $0.01 cached read, $0.50 output (checked Nov 8); cache writes cost
 # 1.25x input on GPT-5.6 and later (OpenAI prompt caching guide, checked Nov 10).
+# gpt-6.1-sol (cluster naming, SIG-65): $2.00 input, $0.10 cached read, $10.00 output (checked
+# Nov 16, OpenAI's rates as listed by llmreference.com and requesty.ai); cache writes 1.25x input.
 PRICES = {
     "gpt-6-luna": {"input": 0.10, "cached": 0.01, "cache_write": 0.125, "output": 0.50},
+    "gpt-6.1-sol": {"input": 2.00, "cached": 0.10, "cache_write": 2.50, "output": 10.00},
 }
 
 REQUEST_TIMEOUT_SECONDS = 60

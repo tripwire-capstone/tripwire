@@ -26,3 +26,8 @@ output "laminar_secret_arns" {
     auth_secret         = aws_ssm_parameter.auth_secret.arn
   }
 }
+
+output "tripwire_secret_key_arn" {
+  description = "SSM parameter holding TRIPWIRE_SECRET_KEY. The stack's Tripwire services read it."
+  value       = aws_ssm_parameter.tripwire_secret_key.arn
+}

@@ -8,6 +8,7 @@ import {
   runCountsFromApi,
   runFiltersToApi,
   runPageFromApi,
+  settingsFromApi,
   signalFromApi,
   summaryFromApi,
 } from "./adapt";
@@ -88,3 +89,7 @@ export const useOverview = (range, bucketMinutes) =>
     () => client.getOverview(range, bucketMinutes).then(overviewFromApi),
     [range?.start, range?.end, bucketMinutes],
   );
+
+// The Settings page and the "not connected yet" banner. The layout loads it once and shares it with
+// the Settings page (useOutletContext), so saving a key updates the banner too.
+export const useSettings = () => useApi(() => client.getSettings().then(settingsFromApi), []);

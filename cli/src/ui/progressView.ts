@@ -87,7 +87,14 @@ export function progressBlock(
   const status = options.status ?? "running";
   const rows = progress.groups.map((group) => {
     const groupStatus = statusOf(group);
-    const detail = groupStatus === "waiting" ? "waiting" : groupStatus === "running" ? group.note : undefined;
+    const detail =
+      groupStatus === "waiting"
+        ? (group.waitNote ?? "waiting")
+        : groupStatus === "pending"
+          ? group.waitNote
+          : groupStatus === "running"
+            ? group.note
+            : undefined;
     return {
       name: group.name,
       status: groupStatus,

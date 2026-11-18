@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 
 from tripwire.poller.poll import ROOT_PARENT_ID
+
+log = logging.getLogger("judge")
 
 
 @dataclass
@@ -72,16 +75,52 @@ def _system_prompt(spans: list[dict]) -> str:
     )
 
 
-def _render_llm(output) -> str:
-    messages = _decode(output)
-    if not isinstance(messages, list):
-        return f"ASSISTANT: {_format_payload(messages)}"
+def _assistant_messages(output) -> list[dict] | None:
+    """The assistant messages in an LLM span's output, or None if the layout is unknown.
+
+    Laminar stores the output in whatever layout the calling library produced:
+      LiteLLM:        [{"role": "assistant", "content": ..., "tool_calls": ...}]
+      OpenAI SDK:     [{"index": 0, "finish_reason": ..., "message": {"role": ..., ...}}]
+    """
+    if not isinstance(output, list) or not output:
+        return None
+    if not all(isinstance(item, dict) for item in output):
+        return None
+    if all("role" in item for item in output):
+        return output
+    if len(output) == 1 and "index" in output[0] and isinstance(output[0].get("message"), dict):
+        return [output[0]["message"]]
+    return None
+
+
+def _layout(output) -> str:
+    """A short description of an output's layout for the log, without its content."""
+    if isinstance(output, list):
+        first = output[0] if output else None
+        keys = sorted(first) if isinstance(first, dict) else type(first).__name__
+        return f"list of {len(output)}, first item: {keys}"
+    if isinstance(output, dict):
+        return f"dict with keys {sorted(output)}"
+    return type(output).__name__
+
+
+def _render_llm(span: dict) -> str:
+    output = _decode(span["output"])
+    if output is None:
+        return "ASSISTANT: (no output)"
+    if isinstance(output, str):
+        return f"ASSISTANT: {output}" if output.strip() else "ASSISTANT: (empty reply)"
+
+    messages = _assistant_messages(output)
+    if messages is None:
+        log.error(
+            "LLM span %s (%s): unrecognized output layout (%s); the judge gets the raw output",
+            span["span_id"], span["name"], _layout(output),
+        )
+        return f"ASSISTANT (unrecognized output layout): {_format_payload(output)}"
 
     lines = []
     for message in messages:
-        if not isinstance(message, dict):
-            lines.append(f"ASSISTANT: {_format_payload(message)}")
-            continue
         if message.get("content"):
             lines.append(f"ASSISTANT: {_format_payload(message['content'])}")
         for call in message.get("tool_calls") or []:
@@ -91,7 +130,7 @@ def _render_llm(output) -> str:
                 lines.append(f"ASSISTANT TOOL CALL: {function['name']}({arguments})")
             else:
                 lines.append(f"ASSISTANT TOOL CALL: {_format_payload(call)}")
-    return "\n".join(lines)
+    return "\n".join(lines) or "ASSISTANT: (empty reply)"
 
 
 def _exception_details(events) -> str:
@@ -117,7 +156,7 @@ def _render_current_span(span: dict) -> str | None:
     if span["parent_span_id"] == ROOT_PARENT_ID:
         body = f"USER: {_format_payload(_decode(span['input']))}"
     elif span["span_type"] == "LLM":
-        body = _render_llm(span["output"])
+        body = _render_llm(span)
     elif span["span_type"] == "TOOL":
         body = (
             f"TOOL {span['name']}\n"

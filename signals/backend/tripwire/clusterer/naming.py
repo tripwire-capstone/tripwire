@@ -3,6 +3,9 @@
 Decisions (docs/clustering/DESIGN.md):
   * Q10: a new cluster's name is the summary of its member closest to the center (the most
     typical member). No LLM call. A cluster is named once; name refresh (#20) comes after the MVP.
+    Since SIG-65 this step runs only when NAMING_MODEL=off: llm_naming.py names clusters with an
+    LLM (and renames them as they grow), and reuses NAME_CANDIDATES_SQL and unique_name from
+    here. When the LLM can't name a new cluster, it gets exactly the name this step would give.
   * Q13 / step 5: a cluster's center is the plain average of all its members (pgvector's avg()).
     update_centers() is the only place this is computed: pool.py calls it for new clusters too.
     Cosine distance ignores length, so the average doesn't need normalizing.

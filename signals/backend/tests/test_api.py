@@ -278,8 +278,16 @@ def test_events_and_runs_of_a_missing_signal_are_404(client):
 # ------------------------------------------------------------------ test on a sample trace
 
 
+@pytest.fixture
+def test_keys(monkeypatch):
+    """Keys from the environment, as before anything is saved on the Settings page."""
+    monkeypatch.setenv("TRIPWIRE_SECRET_KEY", "ab" * 32)
+    monkeypatch.setenv("LMNR_PROJECT_API_KEY", "env-laminar-key-0000")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env-openai-key-1111")
+
+
 def fake_judge(outcome):
-    def judge_fn(laminar, trace, version):
+    def judge_fn(laminar, trace, version, *, openai_api_key):
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
@@ -290,7 +298,7 @@ def fake_judge(outcome):
     ({}, "gpt-6-luna"),
     ({"model": "gpt-5.4-mini"}, "gpt-5.4-mini"),
 ])
-def test_run_returns_findings_and_writes_nothing(client, conn, model_fields, expected):
+def test_run_returns_findings_and_writes_nothing(client, conn, test_keys, model_fields, expected):
     version_id = create(client).json()["version_id"]
     laminar_id, _ = add_turn(conn, version_id)
     runs_before = conn.execute("SELECT count(*) FROM signal_runs").fetchone()[0]
@@ -318,11 +326,31 @@ def test_run_with_a_bad_trace_id_is_422(client):
     assert client.post("/api/test-run", json={"laminar_trace_id": "nope", "definition": VALID}).status_code == 422
 
 
-def test_run_when_the_judge_is_unavailable_is_503(client, conn):
+def test_run_when_the_judge_is_unavailable_is_503(client, conn, test_keys):
     laminar_id, _ = add_turn(conn, create(client).json()["version_id"])
     app.dependency_overrides[get_judge] = fake_judge(JudgeError("429", retryable=True, uses_attempt=False))
     r = client.post("/api/test-run", json={"laminar_trace_id": laminar_id, "definition": VALID})
     assert r.status_code == 503
+
+
+def test_run_uses_the_projects_saved_openai_key(client, conn, test_keys):
+    from tripwire.project_keys import save_key
+    laminar_id, _ = add_turn(conn, create(client).json()["version_id"])
+    save_key(conn, conn.execute("SELECT id FROM projects").fetchone()[0], "openai", "sk-saved-key-2222222")
+    judge_fn = Mock(return_value=JudgeResult(findings=[], analysis="", raw_output="{}", judge_input="",
+                                             dropped_findings=0, model="m", usage=Usage(1, 0, 1, 0.0)))
+    app.dependency_overrides[get_judge] = lambda: judge_fn
+    client.post("/api/test-run", json={"laminar_trace_id": laminar_id, "definition": VALID})
+    assert judge_fn.call_args.kwargs["openai_api_key"] == "sk-saved-key-2222222"
+    assert judge_fn.call_args.args[0]._client.headers["Authorization"] == "Bearer env-laminar-key-0000"
+
+
+def test_run_without_an_openai_key_asks_for_one_in_settings(client, conn, test_keys, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY")
+    laminar_id, _ = add_turn(conn, create(client).json()["version_id"])
+    app.dependency_overrides[get_judge] = fake_judge(AssertionError("the judge must not be called"))
+    r = client.post("/api/test-run", json={"laminar_trace_id": laminar_id, "definition": VALID})
+    assert (r.status_code, r.json()["detail"]) == (503, "No OpenAI key yet: add it in Settings, then test again.")
 
 
 # ------------------------------------------------------------------ filters, paging, counts, clusters, Home

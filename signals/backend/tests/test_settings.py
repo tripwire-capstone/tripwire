@@ -94,9 +94,9 @@ def test_env_example_lists_every_clusterer_setting_with_the_same_default():
         assert kind(documented[name]) == default, f"{name}: .env.example says {documented[name]}, code says {default}"
 
 
-def test_summarizer_defaults_to_gpt_6_luna_and_prompt_version_1():
+def test_summarizer_defaults_to_gpt_6_luna_and_prompt_version_4():
     settings = load_settings(BASE)
-    assert (settings.summarizer_model, settings.summarizer_prompt_version) == ("gpt-6-luna", 1)
+    assert (settings.summarizer_model, settings.summarizer_prompt_version) == ("gpt-6-luna", 4)
 
 
 def test_load_settings_rejects_a_prompt_version_with_no_prompt_files():
@@ -122,17 +122,44 @@ def test_load_settings_rejects_alive_window_shorter_than_one_pass():
     assert "CLUSTER_HEALTH_ALIVE_MINUTES must allow more time than one CLUSTERER_INTERVAL_SECONDS" in message
 
 
-def test_real_mode_requires_an_openai_key_and_says_how_to_opt_out():
-    message = str(pytest.raises(SettingsError, load_settings,
-                                {"DATABASE_URL": "postgresql://example/tripwire"}).value)
-    assert "OPENAI_API_KEY is required in real mode" in message
-    assert "CLUSTERER_MODE=placeholder" in message
+def test_real_mode_starts_without_an_openai_key():
+    # The key is the project's, looked up every pass (saved on the Settings page, else the env).
+    settings = load_settings({"DATABASE_URL": "postgresql://example/tripwire"})
+    assert settings.mode == "real"
 
 
 def test_placeholder_mode_runs_without_an_openai_key():
     settings = load_settings({"DATABASE_URL": "postgresql://example/tripwire", "CLUSTERER_MODE": "placeholder"})
-    assert settings.mode == "placeholder" and settings.openai_api_key is None
+    assert settings.mode == "placeholder"
 
 
 def test_the_openai_key_is_never_printed():
     assert "test-key" not in repr(load_settings(BASE))
+
+
+def test_naming_defaults():
+    settings = load_settings(BASE)
+    assert settings.naming_model == "gpt-6.1-sol"
+    assert (settings.naming_rename_growth, settings.naming_max_renames_per_pass) == (2.0, 10)
+
+
+def test_naming_model_off_turns_llm_naming_off_in_any_case():
+    for value in ("off", "OFF", " Off "):
+        assert settings_with(NAMING_MODEL=value).naming_model is None
+
+
+def test_naming_model_reads_any_other_model_name():
+    assert settings_with(NAMING_MODEL="gpt-6-astra").naming_model == "gpt-6-astra"
+
+
+def test_rename_growth_must_be_more_than_one():
+    # 1 would rename every cluster on every pass.
+    for value in (1, 0.5, 0):
+        assert "NAMING_RENAME_GROWTH must be more than 1" in problem_with(NAMING_RENAME_GROWTH=value)
+    assert settings_with(NAMING_RENAME_GROWTH=1.01).naming_rename_growth == 1.01
+
+
+def test_max_renames_per_pass_may_be_zero_but_not_negative():
+    assert settings_with(NAMING_MAX_RENAMES_PER_PASS=0).naming_max_renames_per_pass == 0
+    assert "NAMING_MAX_RENAMES_PER_PASS must be 0 (no renames) or more, got -1" in problem_with(
+        NAMING_MAX_RENAMES_PER_PASS=-1)

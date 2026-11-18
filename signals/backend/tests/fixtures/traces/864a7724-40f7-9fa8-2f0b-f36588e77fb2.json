@@ -1,0 +1,49 @@
+{
+  "trace": {
+    "trace_id": "864a7724-40f7-9fa8-2f0b-f36588e77fb2",
+    "session_id": "convo-e803dc1e-21c6-45ff-a772-060ccfe1ebb7",
+    "started_at": "2026-11-13T18:09:00.575141+00:00"
+  },
+  "spans": [
+    {
+      "span_id": "00000000-0000-0000-ca61-69e400f15c76",
+      "parent_span_id": "00000000-0000-0000-0000-000000000000",
+      "name": "park_chat",
+      "span_type": "DEFAULT",
+      "started_utc": "2026-11-13 18:09:00.575141642",
+      "ended_utc": "2026-11-13 18:09:01.688689122",
+      "input": "\"Thank you for everything! I have all the details noted, including the confirmation number NPS-74278. I appreciate your help in getting this reservation booked.\"",
+      "output": "\"You're very welcome! I'm glad I could assist you with your reservation. If you have any more questions or need help in the future, don't hesitate to reach out. Have a fantastic trip to the park! Safe travels! 🌲😊\"",
+      "status": "success",
+      "events": [],
+      "model": ""
+    },
+    {
+      "span_id": "00000000-0000-0000-44a1-145ab4e4a21d",
+      "parent_span_id": "00000000-0000-0000-ca61-69e400f15c76",
+      "name": "openai.chat",
+      "span_type": "LLM",
+      "started_utc": "2026-11-13 18:09:00.576714887",
+      "ended_utc": "2026-11-13 18:09:01.687805840",
+      "input": "[{\"role\":\"system\",\"content\":\"You are the Park Trip Assistant for US national parks.\\nYou can look up parks by state, describe parks, report trail status, check\\ncampsite availability, and book one-night standard campsites.\\nAlways use the tools for facts; never invent trail status or availability.\\nBefore booking, confirm park, date (YYYY-MM-DD), party size, and the name for\\nthe reservation. When confirming a booking, state the details exactly as the\\nbooking tool returned them. Keep replies short and friendly. The current year\\nis 2027.\"},{\"role\":\"user\",\"content\":\"Thank you for the confirmation! Just to double-check, can you confirm that the campsite is at Blackwoods with site number A39, and the amenities include flush toilets, drinking water, fire rings, and the ocean nearby? Also, that the reservation is indeed under the name James for four people on June 11, 2027?\"},{\"role\":\"assistant\",\"content\":\"Yes, here are the confirmed details of your campsite reservation:\\n\\n- **Campground:** Blackwoods\\n- **Site Number:** A39\\n- **Amenities:** Flush toilets, drinking water, fire rings, ocean nearby\\n- **Reservation Name:** James\\n- **Party Size:** 4\\n- **Date:** June 11, 2027\\n\\nEverything is correct! If you have any more questions or need assistance, feel free to ask!\"},{\"role\":\"user\",\"content\":\"Great, I appreciate the confirmation! Just to have everything documented, could you provide me with the confirmation number again? I want to make sure I have it noted down correctly.\"},{\"role\":\"assistant\",\"content\":\"The confirmation number for your campsite reservation is **NPS-74278**. Make sure to keep it noted down! If you need anything else, just let me know. Enjoy your trip!\"},{\"role\":\"user\",\"content\":\"Thank you for everything! I have all the details noted, including the confirmation number NPS-74278. I appreciate your help in getting this reservation booked.\"}]",
+      "output": "[{\"finish_reason\":\"stop\",\"index\":0,\"logprobs\":null,\"message\":{\"content\":\"You're very welcome! I'm glad I could assist you with your reservation. If you have any more questions or need help in the future, don't hesitate to reach out. Have a fantastic trip to the park! Safe travels! 🌲😊\",\"refusal\":null,\"role\":\"assistant\",\"annotations\":[],\"audio\":null,\"function_call\":null,\"tool_calls\":null}}]",
+      "status": "success",
+      "events": [],
+      "model": "gpt-4o-mini-2024-07-18"
+    }
+  ],
+  "earlier_turns": [
+    {
+      "input": "\"Hi there! I’m looking to book a campsite at Acadia National Park for the night of June 11, 2027, for four people. The reservation should be under the name James. Can you help me with that?\"",
+      "output": "\"Your campsite has been successfully booked at Acadia National Park! Here are the details:\\n\\n- **Park:** Acadia National Park\\n- **Campground:** Blackwoods\\n- **Site Number:** A39\\n- **Amenities:** Flush toilets, drinking water, fire rings, ocean nearby\\n- **Date:** June 11, 2027\\n- **Party Size:** 4\\n- **Reservation Name:** James\\n- **Confirmation Number:** NPS-74278\\n\\nEnjoy your trip! If you need anything else, just let me know!\""
+    },
+    {
+      "input": "\"Thank you for the confirmation! Just to double-check, can you confirm that the campsite is at Blackwoods with site number A39, and the amenities include flush toilets, drinking water, fire rings, and the ocean nearby? Also, that the reservation is indeed under the name James for four people on June 11, 2027?\"",
+      "output": "\"Yes, here are the confirmed details of your campsite reservation:\\n\\n- **Campground:** Blackwoods\\n- **Site Number:** A39\\n- **Amenities:** Flush toilets, drinking water, fire rings, ocean nearby\\n- **Reservation Name:** James\\n- **Party Size:** 4\\n- **Date:** June 11, 2027\\n\\nEverything is correct! If you have any more questions or need assistance, feel free to ask!\""
+    },
+    {
+      "input": "\"Great, I appreciate the confirmation! Just to have everything documented, could you provide me with the confirmation number again? I want to make sure I have it noted down correctly.\"",
+      "output": "\"The confirmation number for your campsite reservation is **NPS-74278**. Make sure to keep it noted down! If you need anything else, just let me know. Enjoy your trip!\""
+    }
+  ]
+}

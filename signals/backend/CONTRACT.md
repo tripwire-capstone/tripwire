@@ -86,8 +86,10 @@ Rules the database enforces (each one has a test):
 
 Design notes:
 - **Laminar keys are per project and encrypted.** Each Laminar project has its own API key, so keys
-  live on `projects`, encrypted by the app (`encrypt()` / `decrypt()` in `backend/db/crypto`) with the
-  master key `TRIPWIRE_SECRET_KEY`. Postgres only sees ciphertext; the API returns only the last-4 hint.
+  live on `projects`, encrypted by the app (`encrypt()` / `decrypt()` in `tripwire/crypto.py`) with the
+  master key `TRIPWIRE_SECRET_KEY`. Postgres only sees ciphertext; the API returns only a hint (first 4 +
+  last 4). The OpenAI key is stored the same way. Keys are saved on the Settings page; with none saved,
+  the environment's key is used (`tripwire/project_keys.py`).
   The poller polls every project row with its own decrypted key and its own marker; one project's
   failure (e.g. an expired key) doesn't stop the others. A second project is just a second row.
 - **No poller marker table.** Marker = `max(ended_at)` of `traces` for the project, so the marker and
@@ -216,7 +218,8 @@ Temporary answers the skeleton uses for open questions (each lives in one functi
 - One event per run.
 - No `skipped` rows for sampled-out traces (the placeholder doesn't sample).
 - Fan-out not built yet; the real runner decides between poller and runner fan-out (section 4).
-- Laminar key read from `.env`; the `projects` key column holds a placeholder (section 6).
+- ~~Laminar key read from `.env`; the `projects` key column holds a placeholder (section 6).~~ Done
+  (SIG-103): keys saved on the Settings page, encrypted; `.env` is the fallback.
 
 ---
 
@@ -230,11 +233,12 @@ Temporary answers the skeleton uses for open questions (each lives in one functi
   add a new one.
 - **Env vars:** `DATABASE_URL` (set by compose), `LMNR_PROJECT_API_KEY`, `LMNR_API_URL`,
   `LMNR_UI_URL`, `LMNR_PROJECT_ID`, `STUB_EVENT_RATE`, `STUB_CLUSTER_RATE`, optional timing
-  settings, `TEST_DATABASE_URL`. Later: `TRIPWIRE_SECRET_KEY` (master key; the one secret that
-  can't live in the database), `OPENAI_API_KEY`. See `.env.example`.
-- **Laminar keys (target):** encrypted per project in `projects.laminar_api_key_encrypted` with
-  `TRIPWIRE_SECRET_KEY`, as Laminar itself does for provider keys (`AEAD_SECRET_KEY`). The seed
-  encrypts the `.env` key once; the poller decrypts per project. Skeleton: not built yet.
+  settings, `TEST_DATABASE_URL`, `TRIPWIRE_SECRET_KEY` (master key for saved keys; the one secret
+  that can't live in the database), `OPENAI_API_KEY`. See `.env.example`.
+- **Saved keys:** encrypted per project in `projects.laminar_api_key_encrypted` /
+  `openai_api_key_encrypted` with `TRIPWIRE_SECRET_KEY`, as Laminar itself does for provider keys
+  (`AEAD_SECRET_KEY`). Saved on the Settings page (`tripwire/api/settings.py`); the seed stores none.
+  Read through `tripwire/project_keys.py`: saved key first, then the environment's.
 - **Compose service names** = section 2 names (and later the ECS service names).
 - **Images:** one Dockerfile for every service; builds for amd64 and arm64 (Fargate is ARM64).
 

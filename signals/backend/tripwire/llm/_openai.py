@@ -32,7 +32,10 @@ def _complete_openai(
     *,
     timeout: float,
     max_output_tokens: int,
+    api_key: str,
 ) -> _OpenAIResult:
+    """`api_key`: the project's OpenAI key (saved on the Settings page, else OPENAI_API_KEY),
+    looked up by the caller for each run so a new key is used without a restart."""
     response = asyncio.run(
         _request_openai(
             model,
@@ -40,6 +43,7 @@ def _complete_openai(
             schema,
             timeout=timeout,
             max_output_tokens=max_output_tokens,
+            api_key=api_key,
         )
     )
     parsed, usage = _parse_openai_response(response)
@@ -62,9 +66,10 @@ async def _request_openai(
     *,
     timeout: float,
     max_output_tokens: int,
+    api_key: str,
 ) -> Response:
     try:
-        async with AsyncOpenAI(max_retries=0, timeout=timeout) as client:
+        async with AsyncOpenAI(api_key=api_key, max_retries=0, timeout=timeout) as client:
             async with asyncio.timeout(timeout):
                 return await client.responses.create(
                     model=model,

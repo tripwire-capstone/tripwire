@@ -66,3 +66,7 @@ export const testRun = (laminarTraceId, definition) =>
     laminar_trace_id: laminarTraceId,
     definition,
   });
+// Settings: kind is "laminar" or "openai". Responses carry hints only, never a key.
+export const getSettings = () => request("GET", "/settings");
+export const setKey = (kind, apiKey) => request("PUT", `/settings/${kind}`, { api_key: apiKey });
+export const clearKey = (kind) => request("DELETE", `/settings/${kind}`);

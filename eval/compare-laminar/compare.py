@@ -495,6 +495,11 @@ def wizard(args):
         _apply_env_updates(targets)
     else:
         input("   Press Enter once all of the above are updated... ")
+    # The .env files may have just changed, but main() loaded them before the wizard ran. Reload,
+    # overriding, so this process and the traffic generator it starts (which inherits this
+    # environment, and whose own load_dotenv() won't override it) use the new project.
+    # Nov 17: the stale key sent a whole park run to the previous project.
+    load_dotenv(HERE / ".env", override=True)
 
     print("\n4. Reset Tripwire's DB for a clean run: in signals/backend/, `docker compose down -v`,")
     print("   then `docker compose up -d --build` (NOT a plain `up` — see README for why).")

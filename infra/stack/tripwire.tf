@@ -6,18 +6,12 @@
 #   - Its own `tripwire` database and user on Laminar's RDS instance.
 #   - A migration task definition (not a service) that the CLI runs once per deploy, before
 #     the services get a new image (tripwire_services_image).
-#   - The OpenAI and Laminar keys are written to SSM by the CLI; Terraform only knows their names,
-#     so the values never enter state.
+#   - No OpenAI or Laminar keys here: the user adds them in Tripwire → Settings, which stores them
+#     encrypted in the database with TRIPWIRE_SECRET_KEY (infra/persistent/secrets.tf).
 
 locals {
   tripwire_services_enabled = var.tripwire_services_image != ""
   tripwire_url              = "${local.laminar_url}/tripwire/"
-
-  # Written by the CLI (tripwire deploy asks for them), so referenced by ARN, never read here
-  tripwire_cli_secret_arn = {
-    for key in ["openai_api_key", "laminar_api_key"] :
-    key => "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/${var.name}/tripwire/${key}"
-  }
 
   tripwire_common_env = {
     PGSSLMODE           = "require" # RDS Postgres 16 only accepts SSL connections
@@ -28,7 +22,7 @@ locals {
   tripwire_services = {
     poller = {
       command = ["python", "-m", "tripwire.poller"]
-      secrets = ["database_url", "laminar_api_key"]
+      secrets = ["database_url", "secret_key"]
       env     = {}
       # Exactly one copy, even during a deploy: two pollers would read the same traces
       maximum_percent         = 100
@@ -36,14 +30,14 @@ locals {
     }
     runner = {
       command                 = ["python", "-m", "tripwire.runner"]
-      secrets                 = ["database_url", "laminar_api_key", "openai_api_key"]
+      secrets                 = ["database_url", "secret_key"]
       env                     = {}
       maximum_percent         = 200
       minimum_healthy_percent = 100
     }
     clusterer = {
       command = ["python", "-m", "tripwire.clusterer"]
-      secrets = ["database_url", "openai_api_key"]
+      secrets = ["database_url", "secret_key"]
       env     = {}
       # Exactly one copy: two clusterers would make clusters twice (CONTRACT.md)
       maximum_percent         = 100
@@ -51,7 +45,7 @@ locals {
     }
     api = {
       command = ["uvicorn", "tripwire.api.serve:app", "--host", "0.0.0.0", "--port", "8080"]
-      secrets = ["database_url", "laminar_api_key"]
+      secrets = ["database_url", "secret_key"]
       env = {
         TRIPWIRE_BASE_PATH = "/tripwire"
         # The MCP server inside the API (/tripwire/api/mcp): coding agents log in with the same
@@ -68,9 +62,8 @@ locals {
 
   # Secret name inside the container => where ECS reads it
   tripwire_secret_sources = {
-    database_url    = { name = "DATABASE_URL", arn = aws_ssm_parameter.tripwire_database_url.arn }
-    laminar_api_key = { name = "LMNR_PROJECT_API_KEY", arn = local.tripwire_cli_secret_arn.laminar_api_key }
-    openai_api_key  = { name = "OPENAI_API_KEY", arn = local.tripwire_cli_secret_arn.openai_api_key }
+    database_url = { name = "DATABASE_URL", arn = aws_ssm_parameter.tripwire_database_url.arn }
+    secret_key   = { name = "TRIPWIRE_SECRET_KEY", arn = local.tripwire_secret_key_arn }
   }
 
   # Only the clusterer gets a container health check (BACKEND_INFRA_NOTES.md §1): --alive fails
@@ -143,16 +136,15 @@ resource "aws_ecs_task_definition" "tripwire_migrate" {
       environment = [for name, value in merge(local.tripwire_common_env, {
         TRIPWIRE_DB_NAME = "tripwire"
         # The seed stores these on the project row: where the poller and judge reach Laminar
-        # (inside the VPC), and the base of "Open in Laminar" links
-        LMNR_API_URL    = "http://${local.app_server_host}:8000"
-        LMNR_UI_URL     = local.laminar_url
-        LMNR_PROJECT_ID = var.laminar_project_id
+        # (inside the VPC), and the base of "Open in Laminar" links. The project ID comes from the
+        # Laminar key saved in Settings.
+        LMNR_API_URL = "http://${local.app_server_host}:8000"
+        LMNR_UI_URL  = local.laminar_url
       }) : { name = name, value = value }]
       secrets = [
         # The master user, only here: it creates the tripwire user and database
         { name = "MASTER_DATABASE_URL", valueFrom = aws_ssm_parameter.database_url.arn },
         { name = "TRIPWIRE_DB_PASSWORD", valueFrom = aws_ssm_parameter.tripwire_db_password.arn },
-        { name = "LMNR_PROJECT_API_KEY", valueFrom = local.tripwire_cli_secret_arn.laminar_api_key },
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -256,6 +248,10 @@ resource "aws_lb_target_group" "tripwire" {
   protocol    = "HTTP"
   target_type = "ip"
   vpc_id      = aws_vpc.main.id
+
+  # Same as Laminar's target groups (alb.tf). The default 300 s made every deploy and destroy wait
+  # five minutes for an API that only serves a few users' short requests.
+  deregistration_delay = 30
 
   # Also checks the database (the endpoint runs SELECT 1)
   health_check {

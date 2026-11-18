@@ -195,3 +195,14 @@ export const overviewFromApi = (body) => ({
   })),
   runCounts: runCountsFromApi(body.run_counts),
 });
+
+// Settings: which key each provider uses. source is "saved", "environment" or "missing".
+const keyFromApi = (k) => ({ source: k.source, hint: k.hint, unreadable: k.unreadable });
+
+export function settingsFromApi(s) {
+  return {
+    connected: s.connected, // both keys usable; otherwise the layout shows "not connected yet"
+    laminar: { ...keyFromApi(s.laminar), projectId: s.laminar.project_id, projectUrl: s.laminar.project_url },
+    openai: keyFromApi(s.openai),
+  };
+}

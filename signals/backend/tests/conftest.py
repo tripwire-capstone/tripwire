@@ -1,7 +1,7 @@
 """Shared test setup.
 
 Loads .env so tests can see TEST_DATABASE_URL. The `conn` fixture gives each test a
-throwaway schema with migration 001 applied and one project row, dropped afterwards,
+throwaway schema with every migration applied and one project row (no saved keys), dropped afterwards,
 so real tables are never touched. Without TEST_DATABASE_URL, database tests are skipped.
 """
 
@@ -33,10 +33,8 @@ def conn(monkeypatch):
         c.execute(f"SET search_path TO {schema}, public")
         for f in sorted(MIGRATIONS.glob("*.sql")):
             c.execute(f.read_text())
-        c.execute("""INSERT INTO projects (name, laminar_api_url, laminar_ui_url,
-                         laminar_api_key_encrypted, laminar_api_key_hint)
-                     VALUES ('test', 'http://laminar.test:8000', 'http://laminar.test:5667',
-                             'placeholder', 'test')""")
+        c.execute("""INSERT INTO projects (name, laminar_api_url, laminar_ui_url)
+                     VALUES ('test', 'http://laminar.test:8000', 'http://laminar.test:5667')""")
         try:
             yield c
         finally:

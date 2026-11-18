@@ -14,7 +14,7 @@ A clickable React mock of Tripwire's agreed core features, running on fake data,
 
 ## Screens
 
-Five screens, agreed Nov 4. Each follows Laminar where Laminar has the same thing. Reports are not decided yet, so no screen for them.
+Five screens, agreed Nov 4 (plus Settings, Nov 17). Each follows Laminar where Laminar has the same thing. Reports are not decided yet, so no screen for them.
 
 | Screen | Route | Shows |
 | --- | --- | --- |
@@ -22,6 +22,7 @@ Five screens, agreed Nov 4. Each follows Laminar where Laminar has the same thin
 | Signals list | `/signals` | Modeled on Laminar's Signals list: table with Status, Name, Events, Clusters, Activity (sparkline), Last event, Runs, Created. Search by name, time range (default 7 days), "New tripwire" button. Click a row to open its detail. |
 | New signal | `/signals/new` | Start from a preset or blank; name; plain-language instruction; payload fields (name + description each); trigger filters and sample rate (which traces it reads); test on a sample trace (pick a trace, see the event it would produce); run on past traces (backfill); Create. |
 | Signal detail | `/signals/:id` | Modeled on Laminar's Signal page. Tabs: **Events** (cluster strip with drill-down into sub-clusters; stacked events-over-time bars by cluster, gray = not in a cluster; app version markers; Add filter, Columns, Refresh; search; table of Timestamp, Severity, the tripwire's payload fields, Trace ID (opens Laminar), ID; row opens an event panel), **Runs** (runs chart: event / no event / failed, total; table of Status, Source, Event, Clusters, Cost, Updated at, Event ID), **Settings** (Laminar's sections: General / Versions / Alerts / Backfill; all placeholders for now. General will be the shared signal form in edit mode). Time range picker on Events and Runs (default: past 3 days): typed duration, presets, absolute dates; bar size follows the range. |
+| Settings | `/settings` (sidebar, bottom) | *Added Nov 17, 2026 (SIG-103).* Modeled on Laminar's settings: a "Project settings" menu (Laminar, OpenAI; Notifications hidden until alerts exist), and per section a title, one sentence, an **API key** button and a one-row table: Project (Laminar only; ID linking to Laminar), Key (first 4 + last 4, like Laminar), Source (**Saved** on this page / **From .env**, the local fallback; on AWS there is none), and a trash icon for a saved key. The button opens a dialog with one field, the key; the API checks it with the provider before saving and its error shows in the dialog. The Laminar project comes from the key itself, so the user never types a project URL. While a key is missing, every other page shows a "Not connected yet" banner linking here. |
 | Notifications | `/notifications` + bell in the header | In-app list of both alert types; alert settings per tripwire: new cluster on/off, new critical event on/off, "skip similar events" on/off, Slack on/off; a mock Slack message. |
 
 Not screens: sync, backfill jobs, reliability and AWS deployment. The demo can mention them while showing the screens.
@@ -35,7 +36,7 @@ Not screens: sync, backfill jobs, reliability and AWS deployment. The demo can m
 Agreed: the style sample as it is. Mantine components keep everyone's pages consistent.
 
 - **Stack:** React + Vite + Mantine (components, theme) + Mantine Charts. React Router for the five routes.
-- **Layout:** left sidebar (Home, Tripwires, Notifications), header with "Tripwire" and the notification bell.
+- **Layout:** left sidebar (Home, Tripwires, Notifications; Settings at the bottom, as in Laminar), header with "Tripwire" and the notification bell. Sidebar icons from `@tabler/icons-react` (Nov 17).
 - **Theme:** `theme.js` from the style sample (teal accent, medium corners). Dark mode only, with a darker background close to Laminar's.
 - **Conventions:** main action = filled button; secondary = `variant="light"`; severity badges Critical red, Warning yellow, Info gray; preset vs custom badges blue vs grape.
 - **Tone:** plain labels a newcomer understands ("Tripwire events this week").

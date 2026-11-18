@@ -14,9 +14,12 @@ summarize_event() runs them for one event. Bugs in our own code are deliberately
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
+
+from psycopg.types.json import Jsonb
 
 from ..llm import LLMBadOutput, LLMError, LLMInputTooLong, LLMRefused, LLMServiceError
 from .sql import event_signal
@@ -30,6 +33,8 @@ MAX_ATTEMPTS = 3
 BAD_OUTPUT_WAIT = timedelta(minutes=1)
 SERVICE_WAIT = timedelta(seconds=30)
 LONG_SUMMARY_CHARS = 300      # longer is logged as a warning, not rejected (Q19)
+MAX_DETAILS = 8               # prompt v2+ asks for up to 6; anything past 8 is dropped (SIG-64)
+EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")   # a detail holding an email is dropped (prompt v4)
 
 
 # ------------------------------------------------------------------ prompt files
@@ -157,6 +162,7 @@ class RowUpdate:
     cost_usd: float | None
     finished_at: object              # datetime or None
     warning: str | None = None       # something to log, e.g. a long summary
+    details: list | None = None      # prompt v2+; None = the prompt doesn't ask for details
 
 
 ERROR_KINDS = {LLMBadOutput: "bad_output", LLMInputTooLong: "too_long", LLMRefused: "refused",
@@ -179,11 +185,47 @@ def decide(outcome, row, now):
         return _after_error(LLMBadOutput(f"blank {blank}", usage=outcome.usage), row, now)
 
     totals = _add_usage(row, outcome.usage)
-    warning = (f"summary is {len(summary)} characters (over {LONG_SUMMARY_CHARS})"
-               if len(summary) > LONG_SUMMARY_CHARS else None)
+    warnings = []
+    if len(summary) > LONG_SUMMARY_CHARS:
+        warnings.append(f"summary is {len(summary)} characters (over {LONG_SUMMARY_CHARS})")
+    details, details_warning = clean_details(outcome.output)
+    if details_warning:
+        warnings.append(details_warning)
     return RowUpdate("done", cause, summary, row.attempts + 1, None,
                      row.error_kind, row.last_error,      # an earlier error is kept (Q16)
-                     *totals, finished_at=now, warning=warning)
+                     *totals, finished_at=now, warning="; ".join(warnings) or None,
+                     details=details)
+
+
+def clean_details(output):
+    """(details, warning) from a model answer. Details are extra: they never fail an event (SIG-64).
+
+    No "details" key (prompt v1) -> None, so v1 rows stay NULL. Otherwise a list of trimmed,
+    lowercased, non-blank strings, duplicates dropped, at most MAX_DETAILS. Lowercasing here means
+    the same thing matches however the model capitalized it (counting and naming rely on that).
+    Anything that isn't a string is dropped; a detail holding an email address is dropped with a
+    warning (personal data; the prompt asks for none, this is the safety net); a non-list
+    becomes [] with a warning.
+    """
+    if "details" not in output:
+        return None, None
+    raw = output["details"]
+    if not isinstance(raw, list):
+        return [], f"details was {type(raw).__name__}, not a list; saved as empty"
+    cleaned, warnings, emails = [], [], 0
+    for item in raw:
+        text = item.strip().lower() if isinstance(item, str) else ""
+        if EMAIL.search(text):
+            emails += 1
+            continue
+        if text and text not in cleaned:
+            cleaned.append(text)
+    if emails:
+        warnings.append(f"dropped {emails} detail(s) holding an email address")
+    if len(cleaned) > MAX_DETAILS:
+        warnings.append(f"{len(cleaned)} details, kept the first {MAX_DETAILS}")
+        cleaned = cleaned[:MAX_DETAILS]
+    return cleaned, "; ".join(warnings) or None
 
 
 def _after_error(error, row, now):
@@ -250,14 +292,15 @@ def load_row(conn, event_id):
 
 
 SAVE_SQL = """
-INSERT INTO event_summaries (event_id, status, cause, summary, model, prompt_version, attempts,
-                             not_before, error_kind, last_error, input_tokens, cached_input_tokens,
-                             output_tokens, cost_usd, finished_at, updated_at)
-VALUES (%(event_id)s, %(status)s, %(cause)s, %(summary)s, %(model)s, %(prompt_version)s,
+INSERT INTO event_summaries (event_id, status, cause, summary, details, model, prompt_version,
+                             attempts, not_before, error_kind, last_error, input_tokens,
+                             cached_input_tokens, output_tokens, cost_usd, finished_at, updated_at)
+VALUES (%(event_id)s, %(status)s, %(cause)s, %(summary)s, %(details)s, %(model)s, %(prompt_version)s,
         %(attempts)s, %(not_before)s, %(error_kind)s, %(last_error)s, %(input_tokens)s,
         %(cached_input_tokens)s, %(output_tokens)s, %(cost_usd)s, %(finished_at)s, %(now)s)
 ON CONFLICT (event_id) DO UPDATE SET
     status = EXCLUDED.status, cause = EXCLUDED.cause, summary = EXCLUDED.summary,
+    details = EXCLUDED.details,
     model = EXCLUDED.model, prompt_version = EXCLUDED.prompt_version,
     attempts = EXCLUDED.attempts, not_before = EXCLUDED.not_before,
     error_kind = EXCLUDED.error_kind, last_error = EXCLUDED.last_error,
@@ -269,6 +312,8 @@ ON CONFLICT (event_id) DO UPDATE SET
 
 def save(conn, event_id, update, model, prompt_version, now):
     values = {name: getattr(update, name) for name in RowUpdate.__dataclass_fields__ if name != "warning"}
+    if values["details"] is not None:
+        values["details"] = Jsonb(values["details"])
     conn.execute(SAVE_SQL, {**values, "event_id": event_id, "model": model,
                             "prompt_version": prompt_version, "now": now})
 

@@ -8,14 +8,19 @@ shows unhealthy, and the message is in the logs.
 
 This is the only place defaults live; `.env.example` lists the same ones (a test checks they
 match). Defaults come from docs/clustering/DESIGN.md's settings table.
+
+The OpenAI key isn't a setting: it's the project's key (saved on the Settings page, else
+OPENAI_API_KEY), looked up on every pass (__main__.py), so real mode starts without one and
+waits until a key is saved.
 """
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .summarize import prompt_paths
 
 MODES = ("placeholder", "real")
+NAMING_OFF = "off"   # NAMING_MODEL=off: step 4 is the old naming.py (closest member's summary, no LLM)
 
 
 class SettingsError(ValueError):
@@ -39,8 +44,9 @@ class ClustererSettings:
     health_failure_run: int    # CLUSTER_HEALTH_FAILURE_RUN: rule 2, this many summaries in a row failed
     health_alive_minutes: float  # CLUSTER_HEALTH_ALIVE_MINUTES: --alive fails if no pass for longer
     last_pass_file: str        # CLUSTERER_LAST_PASS_FILE: where each pass records its time (--alive)
-    # OPENAI_API_KEY: summarizer + embedder. Required in real mode; never printed (repr=False).
-    openai_api_key: str | None = field(default=None, repr=False)
+    naming_model: str | None   # NAMING_MODEL: the model that names clusters; None = off (SIG-65)
+    naming_rename_growth: float  # NAMING_RENAME_GROWTH: rename when members reach this x the named size
+    naming_max_renames_per_pass: int  # NAMING_MAX_RENAMES_PER_PASS: 0 = no renames
 
 
 # name -> (default, type)
@@ -54,11 +60,14 @@ DEFAULTS = {
     "CLUSTER_POOL_WINDOW_DAYS": (14, int),
     "STUB_CLUSTER_RATE": (0.5, float),
     "SUMMARIZER_MODEL": ("gpt-6-luna", str),
-    "SUMMARIZER_PROMPT_VERSION": (1, int),
+    "SUMMARIZER_PROMPT_VERSION": (4, int),
     "CLUSTER_HEALTH_STALL_MINUTES": (15, int),
     "CLUSTER_HEALTH_FAILURE_RUN": (10, int),
     "CLUSTER_HEALTH_ALIVE_MINUTES": (3.0, float),
     "CLUSTERER_LAST_PASS_FILE": ("/tmp/clusterer-last-pass", str),
+    "NAMING_MODEL": ("gpt-6.1-sol", str),     # picked with try_naming, Nov 16 (SIG-65)
+    "NAMING_RENAME_GROWTH": (2.0, float),
+    "NAMING_MAX_RENAMES_PER_PASS": (10, int),
 }
 
 
@@ -82,7 +91,6 @@ def load_settings(environ=None):
     database_url = environ.get("DATABASE_URL", "").strip()
     if not database_url:
         problems.append("DATABASE_URL is required")
-    openai_api_key = environ.get("OPENAI_API_KEY", "").strip() or None
 
     def check(condition, message):
         if not condition:
@@ -90,9 +98,6 @@ def load_settings(environ=None):
 
     mode = values["CLUSTERER_MODE"]
     check(mode in MODES, f"CLUSTERER_MODE must be one of {', '.join(MODES)}, got {mode!r}")
-    check(mode != "real" or openai_api_key,
-          "OPENAI_API_KEY is required in real mode (the summarizer and embedder call OpenAI): "
-          "set it in .env, or set CLUSTERER_MODE=placeholder to run without OpenAI")
     threshold = values["CLUSTER_ASSIGN_THRESHOLD"]
     check(0 < threshold <= 1,
           f"CLUSTER_ASSIGN_THRESHOLD must be between 0 and 1 (a cosine distance), got {threshold}")
@@ -116,6 +121,15 @@ def load_settings(environ=None):
     check(values["CLUSTERER_LAST_PASS_FILE"].strip() != "", "CLUSTERER_LAST_PASS_FILE can't be empty")
     check(0 <= values["STUB_CLUSTER_RATE"] <= 1,
           f"STUB_CLUSTER_RATE must be between 0 and 1, got {values['STUB_CLUSTER_RATE']}")
+
+    # At 1 or below, every pass would rename every cluster.
+    check(values["NAMING_RENAME_GROWTH"] > 1,
+          f"NAMING_RENAME_GROWTH must be more than 1, got {values['NAMING_RENAME_GROWTH']}")
+    check(values["NAMING_MAX_RENAMES_PER_PASS"] >= 0,
+          "NAMING_MAX_RENAMES_PER_PASS must be 0 (no renames) or more, "
+          f"got {values['NAMING_MAX_RENAMES_PER_PASS']}")
+    naming_model = values["NAMING_MODEL"].strip()
+    naming_model = None if naming_model.lower() == NAMING_OFF else naming_model
 
     version = values["SUMMARIZER_PROMPT_VERSION"]
     missing = [path.name for path in prompt_paths(version) if not path.exists()]
@@ -141,5 +155,7 @@ def load_settings(environ=None):
         health_failure_run=values["CLUSTER_HEALTH_FAILURE_RUN"],
         health_alive_minutes=values["CLUSTER_HEALTH_ALIVE_MINUTES"],
         last_pass_file=values["CLUSTERER_LAST_PASS_FILE"],
-        openai_api_key=openai_api_key,
+        naming_model=naming_model,
+        naming_rename_growth=values["NAMING_RENAME_GROWTH"],
+        naming_max_renames_per_pass=values["NAMING_MAX_RENAMES_PER_PASS"],
     )

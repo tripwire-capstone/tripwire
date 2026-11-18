@@ -11,6 +11,7 @@ export {
   useRunCounts,
   useClusters,
   useOverview,
+  useSettings,
 } from "./hooks";
-export { createSignal, editSignal, setActive, testRun } from "./actions";
+export { createSignal, editSignal, setActive, testRun, saveKey, clearKey } from "./actions";
 export { useDevStatus } from "./dev"; // dev view

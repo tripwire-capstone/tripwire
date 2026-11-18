@@ -162,3 +162,46 @@ def test_saves_before_a_failing_step_are_visible_to_other_connections(conn, monk
         seen = other.execute("SELECT cluster_id FROM cluster_members WHERE event_id = %s",
                              (newcomer,)).fetchone()
     assert seen == (cluster_id,)
+
+
+# ------------------------------------------------------------------ step 4 is pluggable (SIG-65)
+
+def test_run_pass_uses_the_naming_step_it_is_given(conn):
+    calls = []
+
+    def fake_namer(connection):
+        calls.append(connection)
+        return 7
+
+    result = run_pass(conn, real_settings(), name=fake_namer)
+    assert (calls, result.named) == ([conn], 7)
+
+
+def test_run_pass_names_with_naming_py_by_default(conn, monkeypatch):
+    calls = []
+    monkeypatch.setattr(loop, "name_new_clusters", lambda connection: calls.append(connection) or 2)
+    assert run_pass(conn, real_settings()).named == 2 and calls == [conn]
+
+
+def test_a_failing_naming_step_is_logged_and_the_pass_carries_on(conn):
+    def broken_namer(connection):
+        raise ValueError("bad model name")
+
+    result = run_pass(conn, real_settings(), name=broken_namer)
+    assert result.failed_steps == ["name"]
+
+
+def test_a_full_pass_with_llm_naming_forms_and_names_a_cluster(conn):
+    from tripwire.clusterer.llm_client import FakeLLM
+    from tripwire.clusterer.llm_naming import Namer
+    signal_id, version_id = add_signal(conn)
+    summarized_event(conn, version_id, vector_at(0.03, axis=1), "conversation-1", "Refund tool timed out")
+    summarized_event(conn, version_id, vector_at(0.05, axis=2), "conversation-2", "Refund tool timed out again")
+    summarized_event(conn, version_id, vector_at(0.10, axis=3), "conversation-3", "Refund tool was slow")
+    llm = FakeLLM([{"name": "Refund Tool Timeouts"}])
+
+    result = run_pass(conn, real_settings(), name=Namer(llm, "test-model", 2.0, 10))
+    assert (result.created, result.named, result.failed_steps) == (1, 1, [])
+    cluster_id = next(iter(clusters_of_signal(conn, signal_id)))
+    assert name_of(conn, cluster_id) == "Refund Tool Timeouts"
+    assert run_pass(conn, real_settings(), name=Namer(llm, "test-model", 2.0, 10)).named == 0

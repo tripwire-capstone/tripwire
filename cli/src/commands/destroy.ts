@@ -56,8 +56,8 @@ export async function destroy(options: DestroyOptions): Promise<void> {
     [
       `This deletes the stack: ${count} resources, including Laminar, Tripwire,`,
       "the database, the data box and the load balancer.",
-      "Kept: the DNS zone, the certificate, the state bucket, and Tripwire's",
-      "OpenAI and Laminar keys in SSM (reused on the next deploy).",
+      "Kept: the DNS zone, the certificate and the state bucket. Keys saved in",
+      "Tripwire → Settings are in the database snapshot and come back with it.",
       "",
       "Final snapshots of the database and data volume are taken first.",
       `Once they're ready, ${oldFinals} old final and ${scheduled} scheduled`,
@@ -75,11 +75,13 @@ export async function destroy(options: DestroyOptions): Promise<void> {
   }
 
   await applyWithProgress(log, "stack", plan, {
-    title: "Removing Laminar",
+    title: "Removing Tripwire and Laminar",
     action: "remove",
     stack: "stack",
-    estimate: "usually about 10 minutes",
-    usualSeconds: 15 * 60,
+    // Mostly the database's final snapshot (~10 min); the first real Tripwire destroy took ~16 min
+    // with the load balancer's old 5-minute drain
+    estimate: "usually 12–15 minutes",
+    usualSeconds: 20 * 60,
     hint: "Run `tripwire destroy` again to continue where it stopped.",
   });
 
@@ -97,8 +99,17 @@ export async function destroy(options: DestroyOptions): Promise<void> {
   );
 
   await writeConfig({ ...config, lastDestroy: { at: new Date().toISOString() } });
-  p.outro(
-    `Destroyed. Snapshots from ${formatDate(rotation.keep.volume.created)} are kept.\n` +
-      "Run `tripwire deploy --lite` to restore.",
+  p.note(
+    [
+      "Kept for next time:",
+      `  Snapshots from ${formatDate(rotation.keep.volume.created)}: Laminar's traces and`,
+      "  Tripwire's signals, events and clusters",
+      "  The keys saved in Tripwire → Settings (in the database snapshot)",
+      "  Your DNS zone, HTTPS certificate and state bucket",
+      // Route 53 zone $0.50/month plus snapshot storage; an estimate, not a quote
+      "Cost while removed: about $1/month (DNS zone + snapshot storage)",
+    ].join("\n"),
+    "Removed from AWS",
   );
+  p.outro("Run `tripwire deploy --lite` to restore, or add --fresh to start empty.");
 }

@@ -16,4 +16,6 @@ locals {
   laminar_secrets = data.terraform_remote_state.persistent.outputs.laminar_secret_arns
   certificate_arn = data.terraform_remote_state.persistent.outputs.certificate_arn
   zone_id         = data.terraform_remote_state.persistent.outputs.zone_id
+
+  tripwire_secret_key_arn = data.terraform_remote_state.persistent.outputs.tripwire_secret_key_arn
 }
