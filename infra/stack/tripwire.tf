@@ -1,7 +1,7 @@
 # Tripwire: the Signals backend (poller, runner, clusterer, notifier, API + UI), next to Laminar.
 # Reasoning: infra/docs/BACKEND_INFRA_NOTES.md (requirements) and TRIPWIRE_ON_AWS_RULES.md.
 #
-#   - One image, four services with different start commands.
+#   - One image, five services with different start commands.
 #   - Served under Laminar's address at /tripwire/ (an ALB rule ahead of Laminar's catch-all).
 #   - Its own `tripwire` database and user on Laminar's RDS instance.
 #   - A migration task definition (not a service) that the CLI runs once per deploy, before
@@ -163,7 +163,7 @@ resource "aws_ecs_task_definition" "tripwire_migrate" {
   ])
 }
 
-# ---- The four services
+# ---- The five services
 
 resource "aws_ecs_task_definition" "tripwire" {
   for_each = local.tripwire_services_enabled ? local.tripwire_services : {}

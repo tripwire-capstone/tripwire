@@ -211,7 +211,6 @@ async function startTripwire(
   }
 }
 
-// Waits until public DNS sends the domain to the zone
 // Keys live in Tripwire → Settings, not in the deploy. A restored database brings back keys saved
 // there, so the steps only matter while Tripwire shows "Not connected yet"; the CLI can't tell from
 // here (the page is behind the login), so it always shows them.
@@ -223,9 +222,11 @@ export const connectSteps = (config: TripwireConfig, laminarUrl: string): string
     "2. Create a project (or open the one your app sends traces to), and create a",
     "   project API key in its settings.",
     "3. Open Tripwire → Settings and add that key and your OpenAI API key.",
-    "   Signals start reading traces within a minute.",
+    "4. A new install has no signals yet: click New signal and pick a template",
+    "   (Issues, Friction or Intent), or start blank. It reads traces within a minute.",
   ].join("\n");
 
+// Waits until public DNS sends the domain to the zone
 async function waitForDelegation(domain: string, expected: string[]): Promise<void> {
   if (sameNameServers(await publicNameServers(domain), expected)) return;
 

@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pluginCacheDir } from "../terraform/pluginCache.js";
-import { CommandError, ProgramNotFoundError, Log, run } from "./run.js";
+import { CommandError, ProgramNotFoundError, Log, logClock, run } from "./run.js";
 
 // Logs go to a temp folder, not ~/.tripwire
 process.env.TRIPWIRE_HOME = mkdtempSync(join(tmpdir(), "tripwire-run-test-"));
@@ -94,4 +94,16 @@ test("run: Terraform gets the shared plugin cache, the AWS CLI doesn't", async (
   } finally {
     process.env.PATH = realPath;
   }
+});
+
+test("logClock shows UTC hours, minutes and seconds", () => {
+  assert.equal(logClock(Date.UTC(2026, 10, 17, 21, 39, 12, 500)), "21:39:12Z");
+});
+
+test("run: the log stamps each command with its start time and how long it took", async () => {
+  const log = new Log("test");
+  await run(log, process.execPath, ["-e", "console.log('hi')"]);
+  const logged = readFileSync(log.path, "utf8");
+  assert.match(logged, /^\$ \[\d\d:\d\d:\d\dZ\] .+ -e console\.log\('hi'\)$/m);
+  assert.match(logged, /^ {2}\[\d\d:\d\d:\d\dZ\] took \d+\.\ds, exit 0$/m);
 });
