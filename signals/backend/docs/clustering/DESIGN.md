@@ -115,7 +115,7 @@ responses.
 | `OPENAI_API_KEY` | none | Summarizer + embedder + naming, when no key is saved on the Settings page. Not a startup setting: looked up every pass; with no key the OpenAI steps wait and health says "waiting for an OpenAI key" (not unhealthy) |
 | `CLUSTERER_INTERVAL_SECONDS` | 10 | Q13 |
 | `CLUSTER_PREPARE_BATCH` | 50 | Q13 |
-| `CLUSTER_ASSIGN_THRESHOLD` | 0.30 (temporary until calibrated) | Q7, Q14 |
+| `CLUSTER_ASSIGN_THRESHOLD` | 0.18 (calibrated Nov 17 on park run park-causes-1b; was 0.30) | Q7, Q14 |
 | `CLUSTER_MIN_EVENTS` | 3 | Q8 |
 | `CLUSTER_MIN_CONVERSATIONS` | 2 | Q8 |
 | `CLUSTER_POOL_WINDOW_DAYS` | 14 | Q9 |

@@ -54,7 +54,10 @@ DEFAULTS = {
     "CLUSTERER_MODE": ("real", str),
     "CLUSTERER_INTERVAL_SECONDS": (10.0, float),
     "CLUSTER_PREPARE_BATCH": (50, int),
-    "CLUSTER_ASSIGN_THRESHOLD": (0.30, float),   # temporary until calibrated (Q14)
+    # Calibrated Nov 17 on park run park-causes-1b (416 traces, report --sweep): Issues F0.5 is
+    # flat 0.16-0.20 (0.68-0.69, P 0.85 at 0.18) vs 0.50 at 0.30, which made one cluster mixing
+    # every cause. Middle of the flat top, not the edge. Re-check after summarizer v5.
+    "CLUSTER_ASSIGN_THRESHOLD": (0.18, float),
     "CLUSTER_MIN_EVENTS": (3, int),
     "CLUSTER_MIN_CONVERSATIONS": (2, int),
     "CLUSTER_POOL_WINDOW_DAYS": (14, int),

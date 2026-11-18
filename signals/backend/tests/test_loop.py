@@ -25,7 +25,10 @@ TOLERANCE = 1e-5
 
 
 def real_settings(**overrides):
-    environ = {"DATABASE_URL": "postgresql://unused", "CLUSTERER_MODE": "real", "OPENAI_API_KEY": "test-key"}
+    # The vectors below are spaced for a 0.30 threshold. Pinned so these tests check how a pass
+    # works, not the calibrated default (which moved to 0.18 on Nov 17).
+    environ = {"DATABASE_URL": "postgresql://unused", "CLUSTERER_MODE": "real", "OPENAI_API_KEY": "test-key",
+               "CLUSTER_ASSIGN_THRESHOLD": "0.30"}
     environ.update({name: str(value) for name, value in overrides.items()})
     return load_settings(environ)
 
