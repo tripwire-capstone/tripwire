@@ -39,6 +39,16 @@
       "answer_key": null,
       "laminar_raw": "eval/compare-laminar/runs/tau-v5-1/raw.json",
       "notes": "tau-bench retail, prompt v5, threshold 0.24. No per-turn answer key."
+    },
+    {
+      "id": "park3",
+      "kind": "park",
+      "set": "sealed",
+      "dump": "~/tripwire-park-causes-3.dump",
+      "db": "tripwire_park3",
+      "answer_key": "~/projects/park_demo/runs/20261118-110739-park-causes-3",
+      "laminar_raw": "eval/compare-laminar/runs/park-causes-3/raw.json",
+      "notes": "Sealed. Park seed 3, prompt v5, threshold 0.24 (live). Traffic sent Nov 18 19:07 UTC; Tripwire recovered with --skip-traffic after a stale-.env poll."
     }
   ]
 }
