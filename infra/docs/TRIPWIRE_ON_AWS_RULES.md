@@ -46,7 +46,7 @@ Tripwire's poller / runner / clusterer / notifier ──► Laminar's API inside
    - **Database:** the migration task runs once and must succeed.
    - **Then the services:** a second, quiet apply moves them to the new image, and the CLI waits for **Dashboard** (the API) and **Backend** (poller, runner, clusterer, notifier) to run.
 4. Deletes the two keys older deploys stored in SSM, if they're still there (once).
-5. Shows both URLs, then **Connect Tripwire**: sign in to Laminar, create a project API key, and add it and an OpenAI key in Tripwire → Settings. Until then Tripwire shows "Not connected yet" and the workers wait (no crash, no alarm).
+5. Shows both URLs, then **Connect Tripwire**: sign in to Laminar, create a project API key, add it and an OpenAI key in Tripwire → Settings, and (on a new install, which has no signals) create a signal from a template. Until then Tripwire shows "Not connected yet" and the workers wait (no crash, no alarm).
 
 A failed migration stops the deploy before the services change. Rerunning `tripwire deploy --lite` is safe: the migration only applies what's new, and keys saved in Settings stay in the database.
 
