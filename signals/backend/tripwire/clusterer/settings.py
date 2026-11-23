@@ -66,7 +66,7 @@ DEFAULTS = {
     "CLUSTER_POOL_WINDOW_DAYS": (14, int),
     "STUB_CLUSTER_RATE": (0.5, float),
     "SUMMARIZER_MODEL": ("gpt-6-luna", str),
-    "SUMMARIZER_PROMPT_VERSION": (5, int),       # v5 (Nov 17): leads with the cause, not the reaction
+    "SUMMARIZER_PROMPT_VERSION": (6, int),       # v6 (Nov 18): opens with the trigger (tool result, limit), then the response; park Issues F0.5 0.80 -> 0.90 (eval/cluster-loop/EXPERIMENTS.md)
     "CLUSTERER_SUMMARY_THREADS": (4, int),       # SIG-111; 1 = one at a time (the behavior before Nov 17)
     "CLUSTER_HEALTH_STALL_MINUTES": (15, int),
     "CLUSTER_HEALTH_FAILURE_RUN": (10, int),

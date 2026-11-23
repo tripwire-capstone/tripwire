@@ -96,7 +96,7 @@ def test_env_example_lists_every_clusterer_setting_with_the_same_default():
 
 def test_summarizer_defaults_to_gpt_6_luna_and_prompt_version_5():
     settings = load_settings(BASE)
-    assert (settings.summarizer_model, settings.summarizer_prompt_version) == ("gpt-6-luna", 5)
+    assert (settings.summarizer_model, settings.summarizer_prompt_version) == ("gpt-6-luna", 6)
 
 
 def test_summary_threads_defaults_to_four_and_accepts_one():
